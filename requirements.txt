@@ -1,0 +1,7 @@
+# PaperTrim runtime dependencies
+starlette>=0.37,<2
+uvicorn>=0.30,<1
+opencv-python-headless>=4.9,<6
+numpy>=1.26,<3
+Pillow>=10,<14
+python-multipart>=0.0.9,<1

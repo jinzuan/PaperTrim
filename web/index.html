@@ -1,0 +1,940 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f3efe6">
+  <title>纸边 PaperTrim · 扫描裁切与打包</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script nonce="__PAPERTRIM_NONCE__">
+    window.__PAPERTRIM__ = __PAPERTRIM_BOOTSTRAP__;
+  </script>
+</head>
+<body>
+<svg class="svg-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-logo" viewBox="0 0 32 32">
+    <path d="M7.5 3.8h12.2l6 6v18.4a1 1 0 0 1-1 1H7.5a1 1 0 0 1-1-1V4.8a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+    <path d="M19.6 3.9v6.3h6.1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/>
+    <path d="M10.3 21.8c2.1-1.1 3.4.8 5.4-.4 1.9-1.1 3.5-.5 5.5-1.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-import" viewBox="0 0 24 24">
+    <path d="M12 3v11m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 16.5v2.2A2.3 2.3 0 0 0 6.3 21h11.4a2.3 2.3 0 0 0 2.3-2.3v-2.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24">
+    <path d="M3.5 7.3A2.3 2.3 0 0 1 5.8 5h4l2 2.2h6.4a2.3 2.3 0 0 1 2.3 2.3v7.2a2.3 2.3 0 0 1-2.3 2.3H5.8a2.3 2.3 0 0 1-2.3-2.3V7.3Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-export" viewBox="0 0 24 24">
+    <path d="M12 14V3m0 0L8 7m4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M4 16.5v2.2A2.3 2.3 0 0 0 6.3 21h11.4a2.3 2.3 0 0 0 2.3-2.3v-2.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-rotate-left" viewBox="0 0 24 24">
+    <path d="M4.8 10.2A7.6 7.6 0 1 1 6.7 17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <path d="M4.5 4.8v5.7h5.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-rotate-right" viewBox="0 0 24 24">
+    <path d="M19.2 10.2A7.6 7.6 0 1 0 17.3 17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <path d="M19.5 4.8v5.7h-5.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24">
+    <path d="M20 11.5A8 8 0 1 0 18 17" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round"/>
+    <path d="M20.2 5.2v6.1h-6.1" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24">
+    <path d="M4 20 16.3 7.7m-2.8-2.8L5.2 17.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <path d="M18.2 3.5v3.2M16.6 5.1h3.2M19.6 9.2v2.2M18.5 10.3h2.2M8.2 4.3v2.2M7.1 5.4h2.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24">
+    <path d="M4.5 6.8h15M9.2 6.8V4.6h5.6v2.2M6.7 6.8l.8 12.1a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 0 1.8-1.7l.8-12.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10.2 10.5v6.1M13.8 10.5v6.1" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-close" viewBox="0 0 24 24">
+    <path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-check" viewBox="0 0 24 24">
+    <path d="m4.5 12.5 5 5L19.8 7" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24">
+    <path d="m7 9.5 5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24">
+    <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24">
+    <path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24">
+    <path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-undo" viewBox="0 0 24 24">
+    <path d="M9 7 4.5 11.5 9 16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M5 11.5h8.2a5.8 5.8 0 0 1 0 11.6h-1.4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-cursor" viewBox="0 0 24 24">
+    <path d="m5 3.8 14 7.3-6 1.6-2.2 5.8L5 3.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-brush" viewBox="0 0 24 24">
+    <path d="M5 19.5c2.7.3 4.5-1.2 5.4-3.7l8.2-9.9a1.6 1.6 0 0 0-2.4-2.1l-9.4 8.7C4.3 13.7 3.6 16.6 5 19.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M9.4 15.8c1.7.3 3 1.4 3.5 3.2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-eraser" viewBox="0 0 24 24">
+    <path d="m4.7 14.8 7.6-9.3a2.1 2.1 0 0 1 3-.2l3.4 2.8a2.1 2.1 0 0 1 .2 3l-7.6 9.3H8.1l-3.4-2.7a2.1 2.1 0 0 1 0-2.9Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="m10.2 8.9 6.8 5.6M9.7 20.4H20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-hand" viewBox="0 0 24 24">
+    <path d="M8.2 11.2V6.5a1.7 1.7 0 0 1 3.4 0v4.1-6a1.7 1.7 0 0 1 3.4 0v6-4.8a1.7 1.7 0 0 1 3.4 0v6.5-2.9a1.7 1.7 0 0 1 3.4 0v6.2c0 3.4-2.8 6.2-6.2 6.2h-1.4a6.2 6.2 0 0 1-4.9-2.4L4.7 14.9a1.8 1.8 0 0 1 2.5-2.5l1 1.1" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-image" viewBox="0 0 24 24">
+    <rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <circle cx="9" cy="9.6" r="1.7" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    <path d="m5.5 17 4.2-4.4 3.1 3 2.5-2.5 3.2 3.9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-pdf" viewBox="0 0 24 24">
+    <path d="M6 3.5h8.5L19 8v12.5H6V3.5Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M14.2 3.7V8h4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M9 15.5h1.1a1.3 1.3 0 0 0 0-2.6H9v4.2m4.1 0v-4.2h1a1.5 1.5 0 0 1 1.5 1.5v1.2a1.5 1.5 0 0 1-1.5 1.5h-1Zm4.1-2.1h1.5m-1.5 2.1v-4.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-long" viewBox="0 0 24 24">
+    <rect x="6.5" y="2.8" width="11" height="18.4" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M9.3 7h5.4M9.3 10h5.4M9.3 13h5.4M9.3 16h5.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity=".55"/>
+  </symbol>
+  <symbol id="i-zip" viewBox="0 0 24 24">
+    <path d="M6 3.5h12v17H6v-17Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M12 3.8v2.4m0 2v2.4m0 2v2.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+    <rect x="10.9" y="14.6" width="2.2" height="3.2" rx=".5" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  </symbol>
+  <symbol id="i-folder-open" viewBox="0 0 24 24">
+    <path d="M3.5 8.2V6.6A1.6 1.6 0 0 1 5.1 5h4l1.9 2.1h7.3A1.6 1.6 0 0 1 20 8.7v.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M3.2 10.1h17.9l-2 8.2a1.7 1.7 0 0 1-1.7 1.3H6.3a1.7 1.7 0 0 1-1.7-1.3l-1.4-8.2Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-external" viewBox="0 0 24 24">
+    <path d="M13.5 4.5H19.5V10.5M19 5 11 13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M18 14v4.2a1.8 1.8 0 0 1-1.8 1.8H5.8A1.8 1.8 0 0 1 4 18.2V7.8A1.8 1.8 0 0 1 5.8 6H10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-more" viewBox="0 0 24 24">
+    <circle cx="5.5" cy="12" r="1.6" fill="currentColor"/>
+    <circle cx="12" cy="12" r="1.6" fill="currentColor"/>
+    <circle cx="18.5" cy="12" r="1.6" fill="currentColor"/>
+  </symbol>
+  <symbol id="i-warning" viewBox="0 0 24 24">
+    <path d="M12 3.8 21 20H3L12 3.8Z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+    <path d="M12 9v5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <circle cx="12" cy="17" r="1.05" fill="currentColor"/>
+  </symbol>
+  <symbol id="i-info" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="8.7" fill="none" stroke="currentColor" stroke-width="1.8"/>
+    <path d="M12 10.8v5.1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+    <circle cx="12" cy="7.9" r="1.05" fill="currentColor"/>
+  </symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24">
+    <path d="M2.8 12S6.2 5.8 12 5.8 21.2 12 21.2 12 17.8 18.2 12 18.2 2.8 12 2.8 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/>
+  </symbol>
+  <symbol id="i-arrow-left" viewBox="0 0 24 24">
+    <path d="M19 12H5m6-6-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-arrow-right" viewBox="0 0 24 24">
+    <path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24">
+    <path d="M4 7h9M4 12h7M4 17h5M17 5v14m0 0 3.2-3.2M17 19l-3.2-3.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24">
+    <circle cx="12" cy="12" r="3.1" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M12 2.9v2.3M12 18.8v2.3M2.9 12h2.3M18.8 12h2.3M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="i-home" viewBox="0 0 24 24">
+    <path d="M3.5 11.2 12 4l8.5 7.2M5.4 9.8V20h5v-6h3.2v6h5V9.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="i-save" viewBox="0 0 24 24">
+    <path d="M5 3.8h11l3 3V20H5zM8 3.8v5h8v-5M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </symbol>
+</svg>
+
+<div id="app" class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg></span>
+      <span class="brand-text"><strong>纸边</strong><span>PaperTrim</span></span>
+    </div>
+    <button id="homeBtn" class="icon-btn" title="项目主菜单">
+      <svg class="icon"><use href="#i-home"/></svg>
+    </button>
+    <label class="project-field">
+      <span>项目</span>
+      <input id="projectName" type="text" maxlength="80" value="未命名项目" spellcheck="false" aria-label="项目名称">
+    </label>
+    <div class="top-actions">
+      <button id="browseBtn" class="btn ghost" title="全屏浏览裁切结果 (B)">
+        <svg class="icon"><use href="#i-eye"/></svg><span>浏览</span>
+      </button>
+      <div class="menu-anchor">
+        <button id="importBtn" class="btn primary" title="导入图片">
+          <svg class="icon"><use href="#i-import"/></svg><span>导入图片</span>
+          <svg class="icon chevron"><use href="#i-chevron"/></svg>
+        </button>
+        <div id="importMenu" class="dropdown" hidden>
+          <button data-import="files"><svg class="icon"><use href="#i-image"/></svg><span>选择图片文件</span></button>
+          <button data-import="folder"><svg class="icon"><use href="#i-folder"/></svg><span>选择整个文件夹</span></button>
+          <button data-import="paths"><svg class="icon"><use href="#i-folder-open"/></svg><span>输入本地路径…</span></button>
+          <div class="dropdown-sep"></div>
+          <label class="menu-check"><input id="autoDeskewUpload" type="checkbox" checked><span>导入后自动拉直</span></label>
+        </div>
+      </div>
+      <div class="menu-anchor">
+        <button id="exportBtn" class="btn dark" disabled title="导出 (E)">
+          <svg class="icon"><use href="#i-export"/></svg><span>导出</span>
+          <svg class="icon chevron"><use href="#i-chevron"/></svg>
+        </button>
+        <div id="exportMenu" class="dropdown align-right" hidden>
+          <button data-export-kind="folder"><svg class="icon"><use href="#i-folder"/></svg><span>文件夹…</span><small>每张一个文件</small></button>
+          <button data-export-kind="pdf"><svg class="icon"><use href="#i-pdf"/></svg><span>PDF…</span><small>多页文档</small></button>
+          <button data-export-kind="long"><svg class="icon"><use href="#i-long"/></svg><span>长图…</span><small>拼接成一张</small></button>
+          <button data-export-kind="zip"><svg class="icon"><use href="#i-zip"/></svg><span>压缩包…</span><small>ZIP 打包</small></button>
+        </div>
+      </div>
+      <div class="menu-anchor">
+        <button id="menuBtn" class="icon-btn" title="更多"><svg class="icon"><use href="#i-more"/></svg></button>
+        <div id="mainMenu" class="dropdown align-right" hidden>
+          <button data-menu="paths"><svg class="icon"><use href="#i-folder-open"/></svg><span>从本地路径导入…</span></button>
+          <button data-menu="settings"><svg class="icon"><use href="#i-settings"/></svg><span>全局设置…</span></button>
+          <button data-menu="open-exports"><svg class="icon"><use href="#i-folder"/></svg><span>打开导出目录</span></button>
+          <div class="dropdown-sep"></div>
+          <button data-menu="save-project"><svg class="icon"><use href="#i-save"/></svg><span>保存项目</span></button>
+          <button data-menu="home"><svg class="icon"><use href="#i-home"/></svg><span>返回主菜单</span></button>
+          <button data-menu="new-project"><svg class="icon"><use href="#i-plus"/></svg><span>新建项目</span></button>
+          <div class="dropdown-sep"></div>
+          <button data-menu="clear" class="danger"><svg class="icon"><use href="#i-trash"/></svg><span>清空当前项目</span></button>
+          <button data-menu="about"><svg class="icon"><use href="#i-info"/></svg><span>关于纸边</span></button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="workbench">
+    <section class="toolbar" id="toolbar">
+      <label class="check-all">
+        <input id="selectAll" type="checkbox" aria-label="全选">
+        <span>全选</span>
+      </label>
+      <span id="selectionText" class="selection-text">未选择</span>
+      <span class="toolbar-divider"></span>
+      <button class="tool-btn" data-batch="recompute" disabled title="重新识别选中图片">
+        <svg class="icon"><use href="#i-refresh"/></svg><span>重新识别</span>
+      </button>
+      <button class="tool-btn" data-batch="rotate-left" disabled title="左转 90° (Shift+R)">
+        <svg class="icon"><use href="#i-rotate-left"/></svg><span>左转</span>
+      </button>
+      <button class="tool-btn" data-batch="rotate-right" disabled title="右转 90° (R)">
+        <svg class="icon"><use href="#i-rotate-right"/></svg><span>右转</span>
+      </button>
+      <button class="tool-btn" data-batch="rotate-180" disabled title="旋转 180°">
+        <svg class="icon"><use href="#i-refresh"/></svg><span>180°</span>
+      </button>
+      <button class="tool-btn" data-batch="deskew" disabled title="按纸张边缘自动拉直">
+        <svg class="icon"><use href="#i-wand"/></svg><span>自动拉直</span>
+      </button>
+      <button class="tool-btn danger" data-batch="delete" disabled title="删除选中 (Delete)">
+        <svg class="icon"><use href="#i-trash"/></svg><span>删除</span>
+      </button>
+      <div class="toolbar-spacer"></div>
+      <button id="batchSettingsBtn" class="tool-btn" disabled title="批量/全局设置：输出、纸边、增强与白边">
+        <svg class="icon"><use href="#i-settings"/></svg><span>批量/全局</span>
+      </button>
+      <button id="sortBtn" class="tool-btn quiet" title="按文件名自然排序">
+        <svg class="icon"><use href="#i-sort"/></svg><span>按文件名排序</span>
+      </button>
+    </section>
+
+    <div id="jobBanner" class="job-banner" hidden>
+      <span class="spinner"></span>
+      <div class="job-text">
+        <strong id="jobTitle">正在处理…</strong>
+        <span id="jobMessage"></span>
+      </div>
+      <div class="job-progress"><span id="jobBar"></span></div>
+      <span id="jobCount" class="job-count"></span>
+    </div>
+
+    <main id="grid" class="grid" aria-live="polite"></main>
+
+    <section id="empty" class="empty">
+      <div class="empty-art" aria-hidden="true">
+        <div class="sheet sheet-back"></div>
+        <div class="sheet sheet-mid"></div>
+        <div class="sheet sheet-front">
+          <span class="torn-edge"></span>
+          <span class="doodle doodle-1"></span>
+          <span class="doodle doodle-2"></span>
+          <span class="doodle doodle-3"></span>
+        </div>
+      </div>
+      <h2>把扫描的纸片拖到这里</h2>
+      <p>自动找出纸张的真实边缘，沿着撕裂、卷边和缺口裁切。<br>所有图片只在本机处理，不上传、不联网。</p>
+      <div class="empty-actions">
+        <button id="emptyPick" class="btn primary"><svg class="icon"><use href="#i-image"/></svg><span>选择图片</span></button>
+        <button id="emptyFolder" class="btn ghost"><svg class="icon"><use href="#i-folder"/></svg><span>选择文件夹</span></button>
+      </div>
+      <p class="empty-hint">支持 JPG · PNG · WebP · TIFF · BMP &nbsp;·&nbsp; 可一次拖入多张</p>
+    </section>
+  </div>
+</div>
+
+<div id="dropOverlay" class="drop-overlay" hidden>
+  <div class="drop-box">
+    <svg class="icon big"><use href="#i-import"/></svg>
+    <strong>松手即可导入</strong>
+    <span>图片会加入当前项目并自动识别纸张边缘</span>
+  </div>
+</div>
+
+<input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.webp,.tif,.tiff,.bmp,image/*" multiple hidden>
+<input id="folderInput" type="file" webkitdirectory directory multiple hidden>
+
+<div id="editorModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="editor"></div>
+  <div class="editor-shell">
+    <header class="editor-header">
+      <div class="editor-title">
+        <strong id="editorName">—</strong>
+        <span id="editorSub"></span>
+      </div>
+      <div class="editor-head-actions">
+        <button id="editorRecompute" class="btn small ghost" title="用当前参数重新识别"><svg class="icon"><use href="#i-refresh"/></svg><span>重新识别</span></button>
+        <span class="toolbar-divider"></span>
+        <button id="editorRotateLeft" class="icon-btn" title="左转 90°"><svg class="icon"><use href="#i-rotate-left"/></svg></button>
+        <button id="editorRotateRight" class="icon-btn" title="右转 90°"><svg class="icon"><use href="#i-rotate-right"/></svg></button>
+        <button id="editorDone" class="btn primary small">完成</button>
+        <button id="editorClose" class="icon-btn" title="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+    </header>
+    <div class="editor-body">
+      <div class="canvas-panel">
+        <div class="canvas-toolbar">
+          <div class="segmented modes" role="group" aria-label="编辑模式">
+            <button data-mode="vertex" class="active" title="拖动顶点 / 点击边线添加 / 右键删除">
+              <svg class="icon"><use href="#i-cursor"/></svg><span>顶点</span>
+            </button>
+            <button data-mode="quad" title="拖动纸张的四个角，用于透视校正">
+              <svg class="icon"><use href="#i-fit"/></svg><span>四角</span>
+            </button>
+            <button data-mode="add" title="涂抹补回漏掉的纸边">
+              <svg class="icon"><use href="#i-brush"/></svg><span>补边</span>
+            </button>
+            <button data-mode="erase" title="涂抹擦掉多余的背景">
+              <svg class="icon"><use href="#i-eraser"/></svg><span>擦除</span>
+            </button>
+            <button data-mode="pan" title="拖动画面">
+              <svg class="icon"><use href="#i-hand"/></svg><span>平移</span>
+            </button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <button id="zoomOut" class="icon-btn" title="缩小"><svg class="icon"><use href="#i-minus"/></svg></button>
+          <span id="zoomLabel" class="zoom-label">100%</span>
+          <button id="zoomIn" class="icon-btn" title="放大"><svg class="icon"><use href="#i-plus"/></svg></button>
+          <button id="zoomFit" class="icon-btn" title="适应窗口"><svg class="icon"><use href="#i-fit"/></svg></button>
+          <span class="toolbar-divider"></span>
+          <div id="editorViewToggle" class="segmented view-toggle" role="group" aria-label="原始图像或结果预览">
+            <button type="button" data-view="source" class="active" title="原始图像 + 边缘/顶点指示">原始</button>
+            <button type="button" data-view="result" title="按当前设置渲染的最终效果（只读）">结果</button>
+          </div>
+          <span class="toolbar-divider"></span>
+          <button id="undoBtn" class="icon-btn" title="撤销 (Ctrl+Z)" disabled><svg class="icon"><use href="#i-undo"/></svg></button>
+        </div>
+        <div id="canvasWrap" class="canvas-wrap">
+          <canvas id="editorCanvas"></canvas>
+          <div id="canvasBusy" class="canvas-busy" hidden><span class="spinner"></span><span>正在重新识别…</span></div>
+        </div>
+        <div class="canvas-footer">
+          <span id="canvasHint" class="canvas-hint">拖动顶点修改边缘；点击边线添加顶点；右键删除顶点</span>
+          <label id="brushControls" class="brush-controls" hidden>
+            <span>笔刷</span>
+            <input id="brushSize" type="range" min="8" max="200" step="2" value="40">
+            <output id="brushSizeLabel">40 px</output>
+          </label>
+        </div>
+      </div>
+      <aside class="editor-side">
+        <section class="side-card">
+          <div class="side-head"><h3>裁切结果</h3><button id="previewRefresh" class="text-btn" title="刷新预览">刷新</button></div>
+          <div class="result-preview"><img id="resultPreview" alt="裁切结果预览"><div id="previewEmpty" class="preview-empty" hidden>尚无预览</div></div>
+          <div id="resultMeta" class="result-meta"></div>
+        </section>
+
+        <section class="side-card">
+          <h3>方向</h3>
+          <div class="button-row">
+            <button class="btn small ghost" id="sideRotateLeft"><svg class="icon"><use href="#i-rotate-left"/></svg><span>左转</span></button>
+            <button class="btn small ghost" id="sideRotateRight"><svg class="icon"><use href="#i-rotate-right"/></svg><span>右转</span></button>
+            <button class="btn small ghost" id="sideDeskew"><svg class="icon"><use href="#i-wand"/></svg><span>自动拉直</span></button>
+            <button class="btn small ghost" id="sideResetAngle" title="把微调角度设为 0"><span>角度归零</span></button>
+          </div>
+          <label class="slider-row">
+            <span>微调角度</span>
+            <input id="fineAngle" type="range" min="-45" max="45" step="0.1" value="0">
+            <output id="fineAngleLabel">0.0°</output>
+          </label>
+          <label class="select-row"><span>拉直基准</span>
+            <select id="alignEdge">
+              <option value="all" selected>综合（默认，四边）</option>
+              <option value="top">上边</option>
+              <option value="bottom">下边</option>
+              <option value="left">左边</option>
+              <option value="right">右边</option>
+            </select>
+          </label>
+          <p class="field-note">选中的那边对齐水平/垂直；如果这条边撕裂太厉害，会自动退回综合计算。主画布是原图坐标，拉直效果看右侧“裁切结果”预览。</p>
+        </section>
+
+        <section class="side-card">
+          <h3>边缘</h3>
+          <label class="slider-row">
+            <span>收边 / 出边</span>
+            <input id="expandRange" type="range" min="-30" max="30" step="1" value="0">
+            <output id="expandLabel">0 px</output>
+          </label>
+          <div class="edge-quick">
+            <button type="button" data-edge="-3">收 3</button>
+            <button type="button" data-edge="-2">收 2</button>
+            <button type="button" data-edge="-1">收 1</button>
+            <button type="button" data-edge="0">0</button>
+            <button type="button" data-edge="1">出 1</button>
+            <button type="button" data-edge="2">出 2</button>
+          </div>
+          <p class="field-note">负值向内收，能去掉纸张边缘的黑边；正值向外留安全边，避免贴边内容被切。</p>
+          <label class="slider-row">
+            <span>羽化</span>
+            <input id="featherRange" type="range" min="0" max="4" step="0.1" value="0.8">
+            <output id="featherLabel">0.8 px</output>
+          </label>
+          <label class="slider-row">
+            <span>边缘简化</span>
+            <input id="simplifyRange" type="range" min="0" max="10" step="0.5" value="2">
+            <output id="simplifyLabel">2 px</output>
+          </label>
+          <p class="field-note">外扩与羽化即时生效；修改“边缘简化”或阈值后点“重新识别”。</p>
+        </section>
+
+        <section class="side-card">
+          <h3>识别</h3>
+          <label class="check-row"><input id="thresholdAuto" type="checkbox" checked><span>自动阈值</span></label>
+          <label class="slider-row">
+            <span>阈值</span>
+            <input id="thresholdRange" type="range" min="1" max="254" step="1" value="100" disabled>
+            <output id="thresholdLabel">自动</output>
+          </label>
+          <label class="check-row"><input id="invertCheck" type="checkbox"><span>反相（深色纸张 / 浅色背景）</span></label>
+          <label class="check-row"><input id="detectHoles" type="checkbox"><span>检测内部缺口（扣洞，可能误切实心黑块）</span></label>
+          <button id="applyParams" class="btn small ghost wide"><svg class="icon"><use href="#i-refresh"/></svg><span>应用参数并重新识别</span></button>
+        </section>
+
+        <section class="side-card" id="outputCard">
+          <h3>输出方式</h3>
+          <div class="segmented output-modes">
+            <button data-output-mode="cutout" class="active"><span>抠边</span></button>
+            <button data-output-mode="rect"><span>完整矩形</span></button>
+          </div>
+          <div id="outputRectFields">
+            <label class="select-row"><span>校正</span>
+              <select id="outputRectification">
+                <option value="auto">自动（能转正就不拉伸）</option>
+                <option value="rotate">仅旋转</option>
+                <option value="quad">四角透视</option>
+              </select>
+            </label>
+            <label class="select-row"><span>填充</span>
+              <select id="outputFill">
+                <option value="paper">纸色</option>
+                <option value="color">自定义颜色</option>
+                <option value="white">白色</option>
+                <option value="transparent">透明</option>
+                <option value="original">原图原样（不抠像）</option>
+              </select>
+            </label>
+            <label class="slider-row" id="outputColorRow"><span>颜色</span>
+              <input id="outputColor" type="color" value="#ffffff">
+              <output id="outputColorLabel">#ffffff</output>
+            </label>
+            <label class="slider-row"><span>白边</span>
+              <input id="outputPadding" type="number" min="0" max="1000" step="1" value="0">
+              <output>px</output>
+            </label>
+            <label class="select-row"><span>比例</span>
+              <select id="outputAspect">
+                <option value="paper">按纸片比例</option>
+                <option value="custom">自定义</option>
+              </select>
+            </label>
+            <div class="aspect-row" id="outputAspectRow">
+              <input id="outputAspectW" type="number" min="1" max="10000" step="1" value="210">
+              <span>:</span>
+              <input id="outputAspectH" type="number" min="1" max="10000" step="1" value="297">
+            </div>
+            <div class="quad-row">
+              <span>四角</span>
+              <span id="outputQuadStatus" class="muted">自动</span>
+              <button id="outputQuadAuto" class="text-btn" title="恢复自动检测的四角">自动</button>
+              <button id="outputQuadEdit" class="text-btn" title="在画布上拖动四个角">调整</button>
+            </div>
+            <p class="field-note">完整矩形会把纸面铺满矩形；四角透视用于纸张明显倾斜/梯形的情况。主画布蓝色虚线是推算出的原始直边，完整矩形按它裁切并补齐缺角。</p>
+          </div>
+          <label class="select-row"><span>纸边处理</span>
+            <select id="outputEdge">
+              <option value="fit" selected>原始直边（默认）</option>
+              <option value="actual">实际撕边</option>
+            </select>
+          </label>
+          <label class="slider-row"><span>纸边保留</span>
+            <input id="outputEdgeMargin" type="range" min="-30" max="30" step="1" value="0">
+            <output id="outputEdgeMarginLabel">0 px</output>
+          </label>
+          <p class="field-note">正值多留一圈，负值贴紧纸边；只影响完整矩形的裁切范围。</p>
+          <div class="enhance-box">
+            <label class="check-row"><input id="outputEnhance" type="checkbox"><span>画面增强（纸更白、内容颜色更纯）</span></label>
+            <label class="slider-row"><span>增白</span>
+              <input id="outputWhiten" type="range" min="0" max="100" step="1" value="35" disabled>
+              <output id="outputWhitenLabel">35</output>
+            </label>
+            <label class="slider-row"><span>颜色纯度</span>
+              <input id="outputPurity" type="range" min="0" max="100" step="1" value="35" disabled>
+              <output id="outputPurityLabel">35</output>
+            </label>
+            <label class="slider-row"><span>去色度</span>
+              <input id="outputDesaturate" type="range" min="0" max="100" step="1" value="0">
+              <output id="outputDesaturateLabel">0%</output>
+            </label>
+            <label class="check-row mono-boost-row"><input id="outputMonoBoost" type="checkbox" disabled><span>黑白增强（提高对比度/去灰）</span></label>
+            <p class="field-note">去色度 0% 为原色，100% 为黑白；增强只在去色后生效。默认关闭，只影响导出/预览。</p>
+          </div>
+        </section>
+
+        <section class="side-card">
+          <h3>轮廓点数</h3>
+          <div class="point-row">
+            <span>当前</span><strong id="pointCount">0</strong><span>个顶点</span>
+          </div>
+          <div class="point-actions">
+            <input id="pointDelta" type="number" min="1" max="5000" step="1" value="50" aria-label="调整点数">
+            <button id="pointsAdd" class="btn small ghost">增加</button>
+            <button id="pointsRemove" class="btn small ghost">减少</button>
+          </div>
+          <p class="field-note">增加/减少只调整可编辑顶点，不改变裁切形状；要更贴合边缘，请降低“边缘简化”后重新识别。</p>
+          <label class="check-row"><input id="curveEnabled" type="checkbox"><span>钢笔曲线（平滑通过顶点）</span></label>
+          <label class="slider-row">
+            <span>平滑度</span>
+            <input id="curveAmount" type="range" min="0" max="1" step="0.05" value="0.55" disabled>
+            <output id="curveAmountLabel">0.55</output>
+          </label>
+        </section>
+
+        <section class="side-card">
+          <h3>提示</h3>
+          <div id="editorWarnings" class="warnings"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<div id="batchModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="batch"></div>
+  <div class="dialog batch-dialog">
+    <header class="dialog-header">
+      <div><h2>批量 / 全局设置</h2><p>输出方式、纸边处理、增强与白边；可应用到多张，也可记住为新导入的默认。</p></div>
+      <button class="icon-btn" data-close="batch" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="dialog-body">
+      <div class="batch-layout">
+        <aside class="batch-preview">
+          <div class="batch-preview-head"><span>素材预览</span><small id="batchPreviewName">0 张</small></div>
+          <label class="preview-size-row"><span>预览大小</span>
+            <input id="previewSize" type="range" min="280" max="820" step="20" value="680">
+            <output id="previewSizeLabel">680px</output>
+          </label>
+          <div id="batchPreviewList" class="batch-preview-list"></div>
+          <p class="field-note">按当前参数实时渲染；只更新看得见的预览，滚动到的条目会自动补更新。</p>
+        </aside>
+        <div class="batch-settings">
+      <div class="export-scope">
+        <span class="scope-label">范围</span>
+        <label class="radio"><input type="radio" name="batchScope" value="all" checked><span>全部 <b id="batchAllCount">0</b> 张</span></label>
+        <label class="radio"><input type="radio" name="batchScope" value="selected"><span>选中的 <b id="batchSelCount">0</b> 张</span></label>
+      </div>
+
+      <div class="batch-section">
+        <h3>输出方式</h3>
+        <div class="choice-row">
+          <label class="choice"><input type="radio" name="batchMode" value="cutout" checked><span><b>抠边</b><small>只保留纸张形状，边缘透明</small></span></label>
+          <label class="choice"><input type="radio" name="batchMode" value="rect"><span><b>完整矩形</b><small>纸面铺满矩形，可填充纸色/颜色/原图</small></span></label>
+        </div>
+      </div>
+
+      <div class="batch-section">
+        <h3>纸边处理</h3>
+        <div class="preset-grid edge-presets">
+          <button type="button" class="preset-card" data-edge-preset="tight">
+            <strong>贴边少留</strong><small>收紧一圈</small>
+          </button>
+          <button type="button" class="preset-card active" data-edge-preset="fit">
+            <strong>原始直边</strong><small>默认</small>
+          </button>
+          <button type="button" class="preset-card" data-edge-preset="actual">
+            <strong>实际撕边</strong><small>保留毛边</small>
+          </button>
+          <button type="button" class="preset-card" data-edge-preset="quad">
+            <strong>四角拉正</strong><small>透视/梯形</small>
+          </button>
+        </div>
+        <p class="field-note">点预览切换纸边策略；这些策略用于“完整矩形”，抠边模式仍按实际撕边。</p>
+      </div>
+
+      <div class="batch-section">
+        <h3>边缘</h3>
+        <div class="form-grid">
+          <label class="field"><span>收边(-) / 出边(+) px（留空不改变）</span><input id="batchEdge" type="number" min="-30" max="30" step="1" placeholder="不改变"></label>
+          <label class="field"><span>拉直基准</span>
+            <select id="batchAlign">
+              <option value="">不改变（保留当前角度）</option>
+              <option value="top">上边（默认）</option>
+              <option value="bottom">下边</option>
+              <option value="left">左边</option>
+              <option value="right">右边</option>
+              <option value="all">综合（四边）</option>
+            </select>
+          </label>
+          <label class="field"><span>纸边处理</span>
+            <select id="batchEdgeMode">
+              <option value="fit" selected>原始直边（默认）</option>
+              <option value="actual">实际撕边</option>
+            </select>
+          </label>
+          <label class="field"><span>纸边保留（px）</span><input id="batchEdgeMargin" type="number" min="-60" max="60" step="1" value="0"></label>
+          <div class="field"><span>说明</span><span class="field-note" style="margin:6px 0 0">正值多留一圈，负值贴紧纸边。所选边不可靠时自动综合。</span></div>
+        </div>
+      </div>
+
+      <div class="batch-section">
+        <h3>画面增强</h3>
+        <label class="check-row"><input id="batchEnhance" type="checkbox"><span>纸面增白、内容颜色更纯（默认关闭）</span></label>
+        <div class="form-grid">
+          <label class="field"><span>增白</span><input id="batchWhiten" type="range" min="0" max="100" step="1" value="35" disabled></label>
+          <label class="field"><span>颜色纯度</span><input id="batchPurity" type="range" min="0" max="100" step="1" value="35" disabled></label>
+        </div>
+        <label class="slider-row batch-desaturate-row"><span>去色度</span>
+          <input id="batchDesaturate" type="range" min="0" max="100" step="1" value="0">
+          <output id="batchDesaturateLabel">0%</output>
+        </label>
+        <label class="check-row"><input id="batchMonoBoost" type="checkbox" disabled><span>黑白增强（提高对比度/去灰）</span></label>
+        <div class="preset-grid enhance-presets">
+          <button type="button" class="preset-card active" data-enhance-preset="off">
+            <strong>原图</strong><small>默认关闭</small>
+          </button>
+          <button type="button" class="preset-card" data-enhance-preset="soft">
+            <strong>轻微</strong><small>纸更白</small>
+          </button>
+          <button type="button" class="preset-card" data-enhance-preset="strong">
+            <strong>较强</strong><small>颜色更纯</small>
+          </button>
+          <button type="button" class="preset-card" data-enhance-preset="mono">
+            <strong>黑白</strong><small>去色 100%</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="batch-section" id="batchRectSection">
+        <h3>完整矩形</h3>
+        <div class="form-grid">
+          <label class="field"><span>校正</span>
+            <select id="batchRectification">
+              <option value="auto">自动（能转正就不拉伸）</option>
+              <option value="rotate">仅旋转</option>
+              <option value="quad">四角透视</option>
+            </select>
+          </label>
+          <label class="field"><span>填充</span>
+            <select id="batchFill">
+              <option value="paper">纸色</option>
+              <option value="color">自定义颜色</option>
+              <option value="white">白色</option>
+              <option value="transparent">透明</option>
+              <option value="original">原图原样（不抠像）</option>
+            </select>
+          </label>
+          <label class="field" id="batchColorField"><span>颜色</span><input id="batchColor" type="color" value="#ffffff"></label>
+          <label class="field"><span>白边（px）</span><input id="batchPadding" type="number" min="0" max="1000" step="1" value="0"></label>
+          <label class="field"><span>比例</span>
+            <select id="batchAspect">
+              <option value="paper">按纸片比例</option>
+              <option value="custom">自定义</option>
+            </select>
+          </label>
+          <div class="field" id="batchAspectField"><span>宽 : 高</span>
+            <div class="aspect-row"><input id="batchAspectW" type="number" min="1" max="10000" value="210"><span>:</span><input id="batchAspectH" type="number" min="1" max="10000" value="297"></div>
+          </div>
+        </div>
+        <p class="field-note">“自动”会在旋转就能摆正时只旋转；检测到梯形/透视时才用四角拉伸。比例“按纸片”会按四个角的边长估算。</p>
+      </div>
+
+      <label class="check-row"><input id="batchRemember" type="checkbox" checked><span>记住这些输出设置为新导入的默认</span></label>
+        </div>
+      </div>
+    </div>
+    <footer class="dialog-footer">
+      <button class="btn ghost" data-close="batch">取消</button>
+      <button id="batchApply" class="btn primary"><svg class="icon"><use href="#i-check"/></svg><span>应用到图片</span></button>
+    </footer>
+  </div>
+</div>
+
+<div id="exportModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="export"></div>
+  <div class="dialog export-dialog">
+    <header class="dialog-header">
+      <div><h2>导出</h2><p id="exportSubtitle">选择导出方式</p></div>
+      <button id="exportClose" class="icon-btn" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="export-tabs" role="tablist">
+      <button data-kind="folder" class="active"><svg class="icon"><use href="#i-folder"/></svg><span>文件夹</span><small>逐个文件</small></button>
+      <button data-kind="pdf"><svg class="icon"><use href="#i-pdf"/></svg><span>PDF</span><small>多页文档</small></button>
+      <button data-kind="long"><svg class="icon"><use href="#i-long"/></svg><span>长图</span><small>拼接成一张</small></button>
+      <button data-kind="zip"><svg class="icon"><use href="#i-zip"/></svg><span>压缩包</span><small>ZIP 打包</small></button>
+    </div>
+    <div class="dialog-body export-body">
+      <div class="export-scope">
+        <span class="scope-label">范围</span>
+        <label class="radio"><input type="radio" name="exportScope" value="all" checked><span>全部 <b id="scopeAllCount">0</b> 张</span></label>
+        <label class="radio"><input type="radio" name="exportScope" value="selected"><span>选中的 <b id="scopeSelCount">0</b> 张</span></label>
+      </div>
+
+      <div class="export-options" data-panel="folder">
+        <div class="form-grid">
+          <label class="field"><span>图片格式</span><select data-opt="format"><option value="png" selected>PNG（可透明）</option><option value="jpg">JPG</option><option value="webp">WebP</option></select></label>
+          <label class="field"><span>背景</span><select data-opt="background"><option value="transparent" selected>透明</option><option value="white">白色</option><option value="black">黑色</option><option value="#f3efe6">纸色</option></select></label>
+          <label class="field quality-field" data-quality-field><span>质量 <output data-out="quality">92</output></span><input type="range" data-opt="quality" min="50" max="100" step="1" value="92"></label>
+          <label class="field"><span>最大边长</span><select data-opt="max_side"><option value="0">原尺寸</option><option value="3000" selected>3000 px</option><option value="2400">2400 px</option><option value="2000">2000 px</option><option value="1600">1600 px</option><option value="1200">1200 px</option></select></label>
+          <label class="field check-field"><input type="checkbox" data-opt="png_optimize" checked><span>PNG 优化压缩</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="png_quantize"><span>PNG 256 色（体积更小）</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="include_manifest" checked><span>附带 manifest.csv 清单</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="numbering" checked><span>文件名加序号</span></label>
+          <label class="field"><span>文件名前缀</span><input type="text" data-opt="prefix" placeholder="可选" maxlength="40"></label>
+        </div>
+        <p class="field-note">PNG 无损，透明底文件会明显大于原 JPG；需要小体积可用 WebP，或降低最大边长。</p>
+      </div>
+
+      <div class="export-options" data-panel="pdf" hidden>
+        <div class="form-grid">
+          <label class="field"><span>页面</span><select data-opt="page"><option value="a4">A4</option><option value="a3">A3</option><option value="letter">Letter</option><option value="auto">跟随图片尺寸</option></select></label>
+          <label class="field"><span>方向</span><select data-opt="orientation"><option value="auto">自动</option><option value="portrait">纵向</option><option value="landscape">横向</option></select></label>
+          <label class="field"><span>页边距</span><select data-opt="margin_mm"><option value="0">无边距</option><option value="5">5 mm</option><option value="10" selected>10 mm</option><option value="15">15 mm</option></select></label>
+          <label class="field"><span>分辨率</span><select data-opt="dpi"><option value="150">150 dpi</option><option value="200" selected>200 dpi</option><option value="300">300 dpi</option></select></label>
+          <label class="field quality-field"><span>质量 <output data-out="pdf-quality">92</output></span><input type="range" data-opt="quality" min="60" max="100" step="1" value="92"></label>
+          <label class="field"><span>背景</span><select data-opt="background"><option value="white" selected>白色</option><option value="black">黑色</option><option value="#f3efe6">纸色</option></select></label>
+        </div>
+      </div>
+
+      <div class="export-options" data-panel="long" hidden>
+        <div class="form-grid">
+          <label class="field"><span>拼接方向</span><select data-opt="direction"><option value="vertical">纵向（从上到下）</option><option value="horizontal">横向（从左到右）</option></select></label>
+          <label class="field"><span>统一尺寸</span><select data-opt="target_size"><option value="800">宽 800 px</option><option value="1200">宽 1200 px</option><option value="1600" selected>宽 1600 px</option><option value="2000">宽 2000 px</option><option value="2400">宽 2400 px</option></select></label>
+          <label class="field"><span>图片间距</span><select data-opt="gap"><option value="0">0 px</option><option value="12">12 px</option><option value="24" selected>24 px</option><option value="48">48 px</option></select></label>
+          <label class="field"><span>输出格式</span><select data-opt="format"><option value="jpg" selected>JPG</option><option value="png">PNG</option><option value="webp">WebP</option></select></label>
+          <label class="field"><span>背景</span><select data-opt="background"><option value="white" selected>白色</option><option value="black">黑色</option><option value="#f3efe6">纸色</option></select></label>
+          <label class="field quality-field"><span>质量 <output data-out="long-quality">92</output></span><input type="range" data-opt="quality" min="60" max="100" step="1" value="92"></label>
+        </div>
+      </div>
+
+      <div class="export-options" data-panel="zip" hidden>
+        <div class="form-grid">
+          <label class="field"><span>图片格式</span><select data-opt="format"><option value="png" selected>PNG（可透明）</option><option value="jpg">JPG</option><option value="webp">WebP</option></select></label>
+          <label class="field"><span>背景</span><select data-opt="background"><option value="transparent" selected>透明</option><option value="white">白色</option><option value="black">黑色</option><option value="#f3efe6">纸色</option></select></label>
+          <label class="field quality-field" data-quality-field><span>质量 <output data-out="zip-quality">92</output></span><input type="range" data-opt="quality" min="50" max="100" step="1" value="92"></label>
+          <label class="field"><span>最大边长</span><select data-opt="max_side"><option value="0">原尺寸</option><option value="3000" selected>3000 px</option><option value="2400">2400 px</option><option value="2000">2000 px</option><option value="1600">1600 px</option><option value="1200">1200 px</option></select></label>
+          <label class="field check-field"><input type="checkbox" data-opt="png_optimize" checked><span>PNG 优化压缩</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="png_quantize"><span>PNG 256 色（体积更小）</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="include_manifest" checked><span>附带 manifest.csv 清单</span></label>
+          <label class="field check-field"><input type="checkbox" data-opt="numbering" checked><span>文件名加序号</span></label>
+          <label class="field"><span>文件名前缀</span><input type="text" data-opt="prefix" placeholder="可选" maxlength="40"></label>
+        </div>
+        <p class="field-note">透明 PNG 的压缩包体积会比较大；可改用 WebP 或限制最大边长。</p>
+      </div>
+
+      <div class="path-field">
+        <label for="exportPath">输出路径</label>
+        <div class="path-row">
+          <input id="exportPath" type="text" spellcheck="false" autocomplete="off">
+          <button id="resetPath" class="btn small ghost">默认</button>
+        </div>
+        <p id="pathHint" class="field-note">路径存在时会自动加 _2，不会覆盖原有文件。</p>
+      </div>
+
+      <div id="exportProgress" class="export-progress-panel" hidden>
+        <div class="progress-head">
+          <div class="progress-label">
+            <strong id="exportProgressTitle">正在导出</strong>
+            <span id="exportProgressCount" class="progress-count"></span>
+          </div>
+          <strong id="exportProgressPercent" class="progress-percent">0%</strong>
+        </div>
+        <div class="progress-track" role="progressbar" aria-label="导出进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="exportBar"></span>
+        </div>
+        <div class="progress-meta">
+          <span id="exportProgressText">正在准备…</span>
+          <span id="exportProgressHint" class="progress-hint">请保持窗口打开</span>
+        </div>
+      </div>
+
+      <div id="exportResult" class="export-result" hidden></div>
+    </div>
+    <footer class="dialog-footer">
+      <div class="footer-actions">
+        <button id="exportCancel" class="btn ghost">取消</button>
+        <button id="exportStart" class="btn primary"><svg class="icon"><use href="#i-export"/></svg><span>开始导出</span></button>
+      </div>
+    </footer>
+  </div>
+</div>
+
+<div id="homeScreen" class="home-screen" hidden>
+  <div class="home-shell">
+    <header class="home-header">
+      <div class="brand">
+        <span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg></span>
+        <span class="brand-text"><strong>纸边</strong><span>PaperTrim</span></span>
+      </div>
+      <span class="home-tag">本地离线 · 项目主菜单</span>
+    </header>
+    <main class="home-main">
+      <div class="home-copy">
+        <p class="home-kicker">PROJECTS</p>
+        <h1>你的扫描项目</h1>
+        <p>每个项目单独保存图片、裁切和导出设置。点一个项目继续，或者新建一个。</p>
+      </div>
+      <section class="home-projects">
+        <div class="home-projects-head">
+          <div>
+            <p class="home-kicker">RECENT</p>
+            <h2>最近项目</h2>
+          </div>
+          <div class="home-projects-actions">
+            <button id="homeSave" class="btn ghost"><svg class="icon"><use href="#i-save"/></svg><span>保存当前</span></button>
+            <button id="homeNew" class="btn primary"><svg class="icon"><use href="#i-plus"/></svg><span>新建项目</span></button>
+          </div>
+        </div>
+        <div id="projectGrid" class="project-grid"></div>
+        <p class="field-note">项目会自动保存；点缩略图打开项目。右下角可继续导入当前项目。</p>
+        <button id="homeImport" class="text-btn home-import-link">导入图片到当前项目</button>
+      </section>
+    </main>
+    <footer class="home-footer">
+      <span>所有图片只在本机处理，不上传、不联网。</span>
+      <span id="homeSavedAt"></span>
+    </footer>
+  </div>
+</div>
+
+<div id="globalPreviewModal" class="modal global-preview-modal" hidden>
+  <div class="modal-backdrop" data-close="global-preview"></div>
+  <div class="global-preview-shell">
+    <header class="global-preview-head">
+      <div><strong id="globalPreviewName">预览</strong><span id="globalPreviewMeta"></span></div>
+      <button id="globalPreviewClose" class="icon-btn" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="global-preview-stage">
+      <img id="globalPreviewImage" alt="放大预览">
+      <span id="globalPreviewLoading" class="global-preview-loading">正在生成大图…</span>
+    </div>
+    <button id="globalPreviewPrev" class="global-preview-nav prev" aria-label="上一张">‹</button>
+    <button id="globalPreviewNext" class="global-preview-nav next" aria-label="下一张">›</button>
+  </div>
+</div>
+
+<div id="newProjectModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="new-project"></div>
+  <div class="dialog small-dialog">
+    <header class="dialog-header">
+      <div><h2>新建项目</h2><p>每个项目单独保存自己的图片和设置。</p></div>
+      <button class="icon-btn" data-close="new-project" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="dialog-body">
+      <label class="field"><span>项目名称</span><input id="newProjectName" type="text" maxlength="80" value="未命名项目" autocomplete="off"></label>
+    </div>
+    <footer class="dialog-footer">
+      <button class="btn ghost" data-close="new-project">取消</button>
+      <button id="newProjectCreate" class="btn primary">创建并打开</button>
+    </footer>
+  </div>
+</div>
+
+<div id="pathModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="path"></div>
+  <div class="dialog small-dialog">
+    <header class="dialog-header">
+      <div><h2>从本地路径导入</h2><p>每行一个文件或文件夹，支持整个目录</p></div>
+      <button class="icon-btn" data-close="path" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="dialog-body">
+      <textarea id="pathInput" rows="5" spellcheck="false" placeholder="D:\扫描件\第一批&#10;D:\扫描件\第二批\page.jpg"></textarea>
+      <div class="check-row"><label><input id="pathRecursive" type="checkbox" checked> 包含子文件夹</label><label><input id="pathDedupe" type="checkbox" checked> 跳过重复图片</label><label><input id="pathDeskew" type="checkbox" checked> 导入后自动拉直</label></div>
+      <p class="field-note">路径只在本机读取，图片会复制一份到项目目录中。</p>
+    </div>
+    <footer class="dialog-footer">
+      <button class="btn ghost" data-close="path">取消</button>
+      <button id="pathStart" class="btn primary"><svg class="icon"><use href="#i-import"/></svg><span>开始导入</span></button>
+    </footer>
+  </div>
+</div>
+
+<div id="aboutModal" class="modal" hidden>
+  <div class="modal-backdrop" data-close="about"></div>
+  <div class="dialog small-dialog about-dialog">
+    <header class="dialog-header">
+      <div class="about-title"><span class="brand-mark"><svg viewBox="0 0 32 32"><use href="#i-logo"/></svg></span><div><h2>纸边 PaperTrim</h2><p>版本 <span id="aboutVersion">__PAPERTRIM_VERSION__</span></p></div></div>
+      <button class="icon-btn" data-close="about" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+    </header>
+    <div class="dialog-body about-body">
+      <p>一个完全离线的扫描纸片裁切与打包工具。沿着纸张的真实边缘裁切，保留撕裂、缺口和卷边，不漏掉贴边的内容。</p>
+      <ul class="plain-list">
+        <li>所有图片只在本机处理，不上传、不联网，也没有遥测。</li>
+        <li>导出的图片会重新编码，不携带原始 EXIF / GPS 信息。</li>
+        <li>开源软件，MIT License。可自由使用、修改和分发。</li>
+      </ul>
+      <p class="muted">快捷键：R 右转 · Shift+R 左转 · Delete 删除 · Ctrl+A 全选 · B 浏览 · E 导出 · Esc 关闭</p>
+      <p class="muted" id="aboutPerformance">性能：自动</p>
+    </div>
+    <footer class="dialog-footer">
+      <button class="btn primary" data-close="about">知道了</button>
+    </footer>
+  </div>
+</div>
+
+<div id="confirmModal" class="modal" hidden>
+  <div class="modal-backdrop" data-confirm="cancel"></div>
+  <div class="dialog confirm-dialog">
+    <header class="dialog-header"><div><h2 id="confirmTitle">确认</h2></div></header>
+    <div class="dialog-body"><p id="confirmMessage"></p></div>
+    <footer class="dialog-footer">
+      <button class="btn ghost" data-confirm="cancel">取消</button>
+      <button id="confirmOk" class="btn danger-solid" data-confirm="ok">确认</button>
+    </footer>
+  </div>
+</div>
+
+<div id="lightbox" class="lightbox" hidden>
+  <button class="lightbox-close icon-btn" id="lightboxClose" aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+  <button class="lightbox-nav prev" id="lightboxPrev" aria-label="上一张"><svg class="icon"><use href="#i-arrow-left"/></svg></button>
+  <figure class="lightbox-figure">
+    <img id="lightboxImage" alt="裁切结果大图">
+    <figcaption><span id="lightboxName"></span><span id="lightboxCounter"></span></figcaption>
+  </figure>
+  <button class="lightbox-nav next" id="lightboxNext" aria-label="下一张"><svg class="icon"><use href="#i-arrow-right"/></svg></button>
+</div>
+
+<div id="toastStack" class="toast-stack" aria-live="polite"></div>
+
+<script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
+
