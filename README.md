@@ -95,6 +95,10 @@ PaperTrim 会：
 
 ![导出进度](docs/screenshot-progress.png)
 
+## 下载
+
+Windows 免安装包（解压后运行 `PaperTrim.exe`）见 [Releases](https://github.com/jinzuan/PaperTrim/releases)。
+
 ## 快速开始
 
 要求 **Python 3.10+**（Windows / macOS / Linux 均可，Windows 体验最完整）。
