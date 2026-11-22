@@ -5,7 +5,7 @@
 
 ## 作者与说明
 
-- 作者：**DeepSeek（大肥鱼）**、**金钻**
+- 作者：**DeepSeek（大肥鱼）**、**金钻**（见 [AUTHORS.md](AUTHORS.md)）
 - 本项目代码由 AI 完成；人工负责需求确认、功能测试、验收与发布。
 
 ![主界面](docs/screenshot-grid.png)
