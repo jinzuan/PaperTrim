@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from app.detector import detect_paper
+from app.detector import detect_paper, detect_regions
 from app.exporters import run_export
 from app.imaging import (
     build_mask, encode_bgra, load_bgr, read_image_size, render_record,
@@ -471,6 +471,95 @@ class StoreAndExportTests(unittest.TestCase):
         with Image.open(long_image["path"]) as image:
             self.assertEqual(image.width, 600)
             self.assertGreater(image.height, 400)
+
+    def _cards_store(self, torn: bool = False) -> tuple[Store, str]:
+        """A tiny project with two pieces on one scan."""
+        store = Store(self.root / ("cards-data" if not torn else "torn-data"))
+        image = np.full((1200, 1800, 3), 16, dtype=np.uint8)
+        if torn:
+            cv2.fillPoly(image, [np.array(
+                [[200, 140], [880, 130], [885, 990], [205, 1000]], np.int32)], (236, 235, 232))
+            cv2.fillPoly(image, [np.array(
+                [[895, 150], [1570, 160], [1565, 1010], [900, 1000]], np.int32)], (230, 229, 226))
+            path = self.root / "torn.jpg"
+        else:
+            cv2.fillPoly(image, [np.array(
+                [[150, 130], [760, 110], [775, 980], [165, 1010]], np.int32)], (238, 237, 234))
+            cv2.fillPoly(image, [np.array(
+                [[980, 190], [1660, 210], [1650, 1080], [1000, 1060]], np.int32)], (231, 229, 226))
+            path = self.root / "cards.jpg"
+        Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)).save(path, quality=95)
+        record, reason = store.import_file(path, original_name=path.name)
+        self.assertIsNotNone(record, reason)
+        store.detect(record["id"])
+        return store, record["id"]
+
+    def test_detect_regions_two_cards(self):
+        store, image_id = self._cards_store()
+        detail = store.detail(image_id)
+        self.assertEqual(len(detail["regions"]), 2)
+        self.assertEqual(detail["region_count"], 2)
+        self.assertEqual(detail["enabled_regions"], 2)
+        self.assertEqual(detail["detect_multi"], True)
+        for region in detail["regions"]:
+            self.assertGreaterEqual(len(region["polygon"]), 3)
+            self.assertIn("label", region)
+            self.assertTrue(region["enabled"])
+
+    def test_region_selection_rectify_and_export(self):
+        store, image_id = self._cards_store()
+        detail = store.detail(image_id)
+        second = detail["regions"][1]["id"]
+        detail = store.regions_update(image_id, second, {"rectify": True})
+        self.assertEqual(detail["rectify_regions"], 1)
+        detail = store.regions_update(image_id, second, {"enabled": False})
+        self.assertEqual(detail["enabled_regions"], 1)
+        self.assertEqual(len(store.export_records([store.find(image_id)])), 1)
+        detail = store.regions_update(image_id, second, {"enabled": True})
+        items = store.export_records([store.find(image_id)])
+        self.assertEqual(len(items), 2)
+        self.assertTrue(any(item["output"]["mode"] == "rect"
+                            and item["output"]["rectification"] == "quad"
+                            for item in items))
+        names = {item["name"] for item in items}
+        self.assertEqual(len(names), 2)
+        folder = self.root / "cards-out"
+        run_export(store, items, "folder", {
+            "path": str(folder), "format": "png", "background": "white",
+        }, lambda *args: None)
+        files = sorted(path.name for path in folder.glob("*.png"))
+        self.assertEqual(len(files), 2)
+
+    def test_region_merge_requires_connection(self):
+        store, image_id = self._cards_store()
+        detail = store.detail(image_id)
+        ids = [region["id"] for region in detail["regions"]]
+        with self.assertRaises(Exception):
+            store.regions_merge(image_id, ids)
+        self.assertEqual(len(store.detail(image_id)["regions"]), 2)
+
+        torn_store, torn_id = self._cards_store(torn=True)
+        torn = torn_store.detail(torn_id)
+        if len(torn["regions"]) >= 2:
+            merged = torn_store.regions_merge(
+                torn_id, [region["id"] for region in torn["regions"][:2]],
+            )
+            self.assertEqual(len(merged["regions"]), 1)
+
+    def test_region_add_manual_and_delete(self):
+        store, image_id = self._cards_store()
+        detail = store.detail(image_id)
+        before = len(detail["regions"])
+        detail = store.regions_add(image_id, 420, 520)
+        self.assertGreaterEqual(len(detail["regions"]), before)
+        detail = store.regions_manual(
+            image_id, [[60, 60], [300, 60], [300, 260], [60, 260]],
+        )
+        self.assertEqual(len(detail["regions"]), before + 1)
+        manual = detail["regions"][-1]
+        self.assertEqual(manual["source"], "manual")
+        detail = store.regions_delete(image_id, manual["id"])
+        self.assertEqual(len(detail["regions"]), before)
 
     def test_dedupe(self):
         path = self.root / "page0.jpg"

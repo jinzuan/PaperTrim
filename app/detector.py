@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import time
+import uuid
 from typing import Any
 
 import cv2
@@ -82,8 +83,8 @@ def _largest_component(mask: np.ndarray) -> tuple[np.ndarray, int, list[int]]:
     return paper, int(stats[largest, cv2.CC_STAT_AREA]), others
 
 
-def _normal_paper_mask(binary: np.ndarray) -> tuple[np.ndarray, int, list[int]]:
-    """Flood the dark backdrop from the border; keep its complement.
+def _paper_inside(binary: np.ndarray) -> np.ndarray:
+    """Everything the border flood cannot reach is a paper candidate.
 
     Thin dark lines (ink, panel borders) are removed from the *background*
     candidate first, so they cannot leak the outside into a closed panel.
@@ -104,7 +105,13 @@ def _normal_paper_mask(binary: np.ndarray) -> tuple[np.ndarray, int, list[int]]:
     flood_mask = np.zeros((padded.shape[0] + 2, padded.shape[1] + 2), dtype=np.uint8)
     cv2.floodFill(filled, flood_mask, (0, 0), 128, flags=8)
     outside = (filled == 128)[pad:pad + height, pad:pad + width]
-    inside = np.where(outside, 0, 255).astype(np.uint8)
+    return np.where(outside, 0, 255).astype(np.uint8)
+
+
+def _normal_paper_mask(binary: np.ndarray) -> tuple[np.ndarray, int, list[int]]:
+    """Flood the dark backdrop from the border; keep its complement."""
+    inside = _paper_inside(binary)
+    kernel_size = max(7, int(round(min(inside.shape[:2]) * 0.0025)) | 1)
     paper, area, others = _largest_component(inside)
     if area <= 0:
         return paper, area, others
@@ -819,5 +826,336 @@ def detect_paper(image_bgr: np.ndarray, raw_params: dict[str, Any] | None = None
         "paper_rect": paper_rect,
         "paper_color": paper_color,
         "holes": holes,
+        "other_areas": others,
         "elapsed_ms": elapsed_ms,
     }
+
+
+# ---------------------------------------------------------------------------
+# Multiple pieces on one scan (region layer)
+#
+# One scan can contain several cards, slips or sheets.  The single-sheet
+# detector keeps the biggest one; the functions below build a list of
+# candidate pieces instead, and support point-driven add / split and merging.
+# ---------------------------------------------------------------------------
+
+MIN_REGION_RATIO = 0.0015      # of the whole image
+MIN_REGION_OF_MAIN = 0.02      # of the largest piece
+MAX_REGIONS = 16
+REGION_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _region_label(index: int) -> str:
+    if 0 <= index < len(REGION_LABELS):
+        return REGION_LABELS[index]
+    return f"R{index + 1}"
+
+
+def _region_threshold_mask(image_bgr: np.ndarray, params: dict[str, Any]):
+    """Shared threshold pipeline for the region layer.
+
+    Returns (work, gray, threshold, binary, scale).
+    """
+    height, width = image_bgr.shape[:2]
+    if height < 16 or width < 16:
+        raise UserError("图片尺寸过小，无法识别纸张。")
+    scale = min(1.0, MAX_DETECT_SIDE / float(max(height, width)))
+    if scale < 1.0:
+        work = cv2.resize(
+            image_bgr,
+            (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        work = image_bgr
+    gray = cv2.cvtColor(work, cv2.COLOR_BGR2GRAY)
+    if float(gray.std()) < 2.0:
+        raise UserError("图片几乎是纯色，无法找到纸张边缘。")
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    if params["threshold"] is None:
+        threshold, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        threshold = float(params["threshold"])
+        _, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+    if params["invert"]:
+        binary = cv2.bitwise_not(binary)
+    binary = cv2.morphologyEx(
+        binary, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+    )
+    return work, gray, float(threshold), binary, scale
+
+
+def _grouped_paper_masks(inside: np.ndarray, kernel_size: int,
+                         min_area: float) -> list[tuple[np.ndarray, int]]:
+    """Group paper components that belong to the same physical piece.
+
+    A drawn frame splits one sheet into an inner panel and its outer margin;
+    those parts are close together and must stay one piece.  Two separate
+    cards are far enough apart to stay two pieces.
+    """
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(inside, connectivity=8)
+    if count <= 1:
+        return []
+    min_component = max(40, int(min_area * 0.2))
+    components = [index for index in range(1, count)
+                  if int(stats[index, cv2.CC_STAT_AREA]) >= min_component]
+    if not components:
+        return []
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    grouped = cv2.dilate(inside, kernel, iterations=1)
+    group_count, group_labels = cv2.connectedComponents(grouped, connectivity=8)
+    buckets: dict[int, list[int]] = {}
+    for index in components:
+        member = labels == index
+        counts = np.bincount(group_labels[member], minlength=group_count)
+        counts[0] = 0
+        group_id = int(counts.argmax())
+        buckets.setdefault(group_id, []).append(index)
+    result: list[tuple[np.ndarray, int]] = []
+    for ids in buckets.values():
+        mask = np.isin(labels, ids).astype(np.uint8) * 255
+        area = int((mask > 0).sum())
+        if area >= min_area:
+            result.append((mask, area))
+    result.sort(key=lambda item: item[1], reverse=True)
+    return result
+
+
+def _polygon_from_mask(mask: np.ndarray, simplify: float, scale: float,
+                       width: int, height: int) -> list[list[float]] | None:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    if float(cv2.contourArea(contour)) <= 1.0:
+        return None
+    tolerance = float(max(0.8, simplify))
+    approx = cv2.approxPolyDP(contour, tolerance, True)
+    if len(approx) > 3000:
+        approx = cv2.approxPolyDP(contour, max(1.0, tolerance), True)
+    if len(approx) < 3:
+        approx = cv2.approxPolyDP(contour, max(0.5, tolerance / 2.0), True)
+    if len(approx) < 3:
+        return None
+    points = approx.reshape(-1, 2).astype(np.float32)
+    if scale < 1.0:
+        points = points / scale
+    points[:, 0] = np.clip(points[:, 0], 0, width - 1)
+    points[:, 1] = np.clip(points[:, 1], 0, height - 1)
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in points]
+
+
+def region_bbox(polygon: list[list[float]]) -> list[int]:
+    points = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
+    x, y, w, h = cv2.boundingRect(points.astype(np.int32))
+    return [int(x), int(y), int(w), int(h)]
+
+
+def estimate_region_skew(image_bgr: np.ndarray, polygon: list[list[float]],
+                         bbox: list[int] | None = None, align: str = "all") -> float:
+    """Skew of one piece, estimated only from pixels in its neighbourhood."""
+    if len(polygon) < 3:
+        return 0.0
+    height, width = image_bgr.shape[:2]
+    box = bbox or region_bbox(polygon)
+    x, y, w, h = box
+    pad = int(round(max(16, 0.05 * max(w, h))))
+    x0, y0 = max(0, x - pad), max(0, y - pad)
+    x1, y1 = min(width, x + w + pad), min(height, y + h + pad)
+    local = [[float(px - x0), float(py - y0)] for px, py in polygon]
+    try:
+        if x1 - x0 >= 32 and y1 - y0 >= 32:
+            return float(estimate_skew(image_bgr[y0:y1, x0:x1], local, align=align)["angle"])
+    except Exception:  # noqa: BLE001 - fall back to the outline estimate
+        pass
+    try:
+        return float(estimate_deskew_angle(polygon))
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def build_region(image_bgr: np.ndarray, polygon: list[list[float]], *,
+                 label: str = "A", source: str = "auto", align: str = "all",
+                 region_id: str | None = None) -> dict[str, Any]:
+    """Create a region dict (polygon + quad + paper rect + per-piece skew)."""
+    cleaned = [[round(float(point[0]), 1), round(float(point[1]), 1)] for point in polygon]
+    box = region_bbox(cleaned)
+    quad = detect_quad(cleaned)
+    rectangle = detect_paper_rect(cleaned)
+    skew = round(float(clamp(estimate_region_skew(image_bgr, cleaned, box, align), -45, 45)), 2)
+    area = float(abs(cv2.contourArea(np.asarray(cleaned, dtype=np.float32))))
+    return {
+        "id": region_id or f"r{uuid.uuid4().hex[:10]}",
+        "label": label,
+        "polygon": cleaned,
+        "quad": quad["quad"],
+        "quad_near_rect": bool(quad.get("near_rect")),
+        "quad_aspect": quad.get("quad_aspect"),
+        "paper_rect": rectangle,
+        "skew": skew,
+        "enabled": True,
+        "rectify": False,
+        "source": source,
+        "area": round(area, 1),
+        "bbox": box,
+    }
+
+
+def detect_regions(image_bgr: np.ndarray, raw_params: dict[str, Any] | None = None,
+                   align: str = "all") -> dict[str, Any]:
+    """Detect every plausible piece on the scan (largest first)."""
+    started = time.perf_counter()
+    params = normalize_params(raw_params)
+    work, gray, threshold, binary, scale = _region_threshold_mask(image_bgr, params)
+    height, width = image_bgr.shape[:2]
+    work_h, work_w = work.shape[:2]
+    total = float(work_h * work_w)
+    inside = _paper_inside(binary)
+    kernel_size = max(7, int(round(min(work_h, work_w) * 0.0025)) | 1)
+    min_area = max(64.0, total * MIN_REGION_RATIO)
+    groups = _grouped_paper_masks(inside, kernel_size, min_area)
+    if not groups:
+        raise UserError("没有检测到纸张。请让纸张与背景有较明显的明暗差异。")
+    largest = groups[0][1]
+    groups = [item for item in groups if item[1] >= largest * MIN_REGION_OF_MAIN][:MAX_REGIONS]
+
+    regions: list[dict[str, Any]] = []
+    used_masks: list[np.ndarray] = []
+    for index, (mask, area) in enumerate(groups):
+        polygon = _polygon_from_mask(mask, float(params["simplify"]), scale, width, height)
+        if not polygon:
+            continue
+        regions.append(build_region(
+            image_bgr, polygon, label=_region_label(len(regions)), source="auto", align=align,
+        ))
+        used_masks.append(mask)
+    if not regions:
+        raise UserError("纸张轮廓提取失败，请尝试调整识别阈值。")
+
+    union = np.zeros_like(inside)
+    for mask in used_masks:
+        union = cv2.bitwise_or(union, mask)
+    paper_color = _paper_colour(work, union, threshold)
+    warnings: list[dict[str, str]] = []
+    if len(regions) > 1:
+        warnings.append(_warn(
+            "multi_regions",
+            f"画面里识别到 {len(regions)} 块纸片；可以逐块选择、弃选或合并。",
+            "info",
+        ))
+    if any(region["area"] < total * (scale * scale) * 0.01 for region in regions):
+        warnings.append(_warn(
+            "small_region",
+            "有一块纸片很小，裁切精度可能受影响。",
+            "info",
+        ))
+    return {
+        "regions": regions,
+        "count": len(regions),
+        "threshold": round(threshold, 1),
+        "auto_threshold": params["threshold"] is None,
+        "paper_color": paper_color,
+        "warnings": warnings,
+        "scale": scale,
+        "elapsed_ms": int(round((time.perf_counter() - started) * 1000)),
+    }
+
+
+def segments_at_point(image_bgr: np.ndarray, raw_params: dict[str, Any] | None,
+                      x: float, y: float, align: str = "all") -> list[list[list[float]]]:
+    """Re-detect the piece under a point.
+
+    Returns one polygon normally; returns two (clicked part + remainder) when
+    the point sits inside a larger piece that can be split there.
+    """
+    params = normalize_params(raw_params)
+    work, gray, threshold, binary, scale = _region_threshold_mask(image_bgr, params)
+    height, width = image_bgr.shape[:2]
+    work_h, work_w = work.shape[:2]
+    total = float(work_h * work_w)
+    inside = _paper_inside(binary)
+    kernel_size = max(7, int(round(min(work_h, work_w) * 0.0025)) | 1)
+    min_area = max(64.0, total * MIN_REGION_RATIO)
+    groups = _grouped_paper_masks(inside, kernel_size, min_area)
+    if not groups:
+        raise UserError("没有检测到纸张。")
+    px = int(clamp(round(float(x) * scale), 0, work_w - 1))
+    py = int(clamp(round(float(y) * scale), 0, work_h - 1))
+
+    chosen: np.ndarray | None = None
+    for mask, _area in groups:
+        if mask[py, px] > 0:
+            chosen = mask
+            break
+    if chosen is None:
+        # A click just outside the contour is still meant for that piece.
+        near_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        for mask, _area in groups:
+            if cv2.dilate(mask, near_kernel, iterations=1)[py, px] > 0:
+                chosen = mask
+                break
+    if chosen is None:
+        return []
+    chosen_area = int((chosen > 0).sum())
+
+    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(inside, connectivity=8)
+    comp_id = int(labels[py, px])
+    member_ids = [int(value) for value in np.unique(labels[chosen > 0]) if int(value) > 0]
+    if comp_id not in member_ids:
+        comp_id = 0
+        best = None
+        for candidate in member_ids:
+            cx = int(stats[candidate, cv2.CC_STAT_LEFT] + stats[candidate, cv2.CC_STAT_WIDTH] / 2)
+            cy = int(stats[candidate, cv2.CC_STAT_TOP] + stats[candidate, cv2.CC_STAT_HEIGHT] / 2)
+            distance = (cx - px) ** 2 + (cy - py) ** 2
+            if best is None or distance < best[0]:
+                best = (distance, candidate)
+        if best is None:
+            return []
+        comp_id = best[1]
+
+    comp_area = int(stats[comp_id, cv2.CC_STAT_AREA])
+    if comp_area > chosen_area * 0.92:
+        polygon = _polygon_from_mask(chosen, float(params["simplify"]), scale, width, height)
+        return [polygon] if polygon else []
+
+    comp_mask = (labels == comp_id).astype(np.uint8) * 255
+    remainder = chosen.copy()
+    remainder[comp_mask > 0] = 0
+    result: list[list[list[float]]] = []
+    clicked = _polygon_from_mask(comp_mask, float(params["simplify"]), scale, width, height)
+    if clicked:
+        result.append(clicked)
+    rest_area = int((remainder > 0).sum())
+    if rest_area >= chosen_area * 0.03:
+        rest = _polygon_from_mask(remainder, float(params["simplify"]), scale, width, height)
+        if rest:
+            result.append(rest)
+    return result
+
+
+def merge_polygons(polygons: list[list[list[float]]], width: int, height: int,
+                   simplify: float = 2.0) -> list[list[float]] | None:
+    """Union of several *touching* polygons, traced as one outline.
+
+    Returns None when the pieces are not connected: merging them would drag a
+    strip of background into the result.
+    """
+    mask = np.zeros((int(height), int(width)), dtype=np.uint8)
+    for polygon in polygons:
+        if len(polygon) < 3:
+            continue
+        points = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
+        cv2.fillPoly(mask, [points.astype(np.int32)], 255)
+    if int((mask > 0).sum()) == 0:
+        return None
+    gap = max(3, int(round(min(int(width), int(height)) * 0.006)))
+    closed = cv2.morphologyEx(
+        mask, cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (gap * 2 + 1, gap * 2 + 1)),
+    )
+    count, _labels, _stats, _centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
+    if count - 1 > 1:
+        return None
+    return _polygon_from_mask(closed, float(max(0.8, simplify)), 1.0, int(width), int(height))

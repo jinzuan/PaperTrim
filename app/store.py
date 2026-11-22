@@ -13,9 +13,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
+
 from .detector import (
-    DEFAULT_ALIGN, DEFAULT_PARAMS, detect_paper, detect_paper_rect, detect_quad,
-    estimate_deskew_angle, estimate_skew, normalize_align, normalize_params,
+    DEFAULT_ALIGN, DEFAULT_PARAMS, build_region, detect_paper, detect_paper_rect,
+    detect_quad, detect_regions, estimate_deskew_angle, estimate_region_skew,
+    estimate_skew, merge_polygons, normalize_align, normalize_params, region_bbox,
+    segments_at_point, _region_label,
 )
 from .imaging import (
     DEFAULT_CURVE,
@@ -190,6 +195,8 @@ class Store:
                     rec["rotation"] = 0
                 rec["fine_angle"] = round(float(clamp(rec.get("fine_angle", 0) or 0, -45, 45)), 2)
                 rec["rev"] = int(rec.get("rev", 1) or 1)
+                if self._normalize_regions(rec):
+                    changed = True
                 images.append(rec)
             if len(images) != len(self.session.get("images", [])):
                 changed = True
@@ -245,6 +252,14 @@ class Store:
             "paper_color": rec.get("paper_color") or "#ffffff",
             "quad_manual": bool(rec.get("quad_manual")),
             "paper_rect": rec.get("paper_rect") or [],
+            "region_count": len(rec.get("regions") or []),
+            "enabled_regions": sum(
+                1 for region in (rec.get("regions") or []) if region.get("enabled") is not False
+            ),
+            "rectify_regions": sum(
+                1 for region in (rec.get("regions") or []) if region.get("rectify")
+            ),
+            "detect_multi": rec.get("detect_multi", True) is not False,
             "rev": rev,
             "order": int(rec.get("order", 0) or 0),
             "imported_at": rec.get("imported_at"),
@@ -297,6 +312,8 @@ class Store:
             "quad": rec.get("quad") or [],
             "quad_manual": bool(rec.get("quad_manual")),
             "holes": rec.get("holes") or [],
+            "regions": _deepcopy(rec.get("regions") or []),
+            "detect_multi": rec.get("detect_multi", True) is not False,
             "curve": rec.get("curve") or normalize_curve(None),
             "source_preview_url": f"/media/source/{rec['id']}.jpg",
         })
@@ -384,6 +401,8 @@ class Store:
             "curve": dict(DEFAULT_CURVE),
             "paper_color": "#ffffff",
             "detection": None,
+            "regions": [],
+            "detect_multi": True,
             "rev": 1,
         }
         with self._lock:
@@ -444,6 +463,13 @@ class Store:
             rec["quad_manual"] = False
             rec["holes"] = detection.get("holes") or []
             rec["paper_color"] = detection.get("paper_color") or "#ffffff"
+            rec["regions"] = self._build_regions_from_detection(
+                image, detection, merged_params,
+                multi=bool(rec.get("detect_multi", True)),
+                align=normalize_align(rec.get("align_edge")),
+            )
+            self._relabel_regions(rec)
+            self._sync_primary(rec)
             if clear_manual:
                 rec["strokes"] = []
             rec["rev"] = int(rec.get("rev", 1)) + 1
@@ -518,6 +544,10 @@ class Store:
                     rec["fine_angle"] = round(float(clamp(patch["fine_angle"], -45, 45)), 2)
                 except (TypeError, ValueError):
                     raise UserError("微调角度无效。")
+                if rec.get("regions"):
+                    rec["regions"][0]["skew"] = rec["fine_angle"]
+            if "detect_multi" in patch:
+                rec["detect_multi"] = bool(patch.get("detect_multi"))
             if "params" in patch:
                 rec["params"] = normalize_params(patch.get("params"), rec.get("params") or {})
             if "output" in patch:
@@ -538,6 +568,22 @@ class Store:
                 rec["paper_rect"] = detect_paper_rect(polygon)
                 if not rec.get("quad_manual"):
                     rec["quad"] = detect_quad(polygon)["quad"]
+                if rec.get("regions"):
+                    primary = rec["regions"][0]
+                    rebuilt = self._region_from_polygon(
+                        polygon,
+                        {
+                            "quad": detect_quad(polygon)["quad"],
+                            "paper_rect": rec["paper_rect"],
+                            "fine_angle": primary.get("skew", 0),
+                        },
+                        label=primary.get("label") or "A",
+                        source="manual",
+                        region_id=primary.get("id"),
+                    )
+                    rebuilt["enabled"] = primary.get("enabled", True)
+                    rebuilt["rectify"] = bool(primary.get("rectify"))
+                    rec["regions"][0] = rebuilt
                 if rec.get("status") != "error":
                     rec["status"] = "ready"
                     rec["error"] = None
@@ -648,9 +694,35 @@ class Store:
     def deskew(self, image_id: str, force: bool = True) -> dict[str, Any]:
         rec = self.find(image_id)
         align = normalize_align(rec.get("align_edge"))
+        image = self.load_source(rec)
+        regions = rec.get("regions") or []
+        if len(regions) > 1:
+            with self._lock:
+                rec = self.find(image_id)
+                changed = False
+                for index, region in enumerate(rec.get("regions") or []):
+                    try:
+                        if index == 0:
+                            angle = float(estimate_skew(image, region["polygon"], align=align)["angle"])
+                        else:
+                            angle = estimate_region_skew(
+                                image, region["polygon"], region.get("bbox"), align,
+                            )
+                    except Exception:  # noqa: BLE001
+                        angle = estimate_deskew_angle(region.get("polygon") or [])
+                    angle = round(float(clamp(angle, -45, 45)), 2)
+                    if abs(float(region.get("skew", 0) or 0) - angle) >= 0.05:
+                        region["skew"] = angle
+                        changed = True
+                if not changed:
+                    return self.detail(image_id)
+                self._sync_primary(rec)
+                rec["rev"] = int(rec.get("rev", 1)) + 1
+                self.save()
+            return self.detail(image_id)
         try:
             estimate = estimate_skew(
-                self.load_source(rec), rec.get("polygon") or [], align=align,
+                image, rec.get("polygon") or [], align=align,
             )
             angle = estimate["angle"]
         except Exception:
@@ -685,6 +757,437 @@ class Store:
 
     def set_rotation(self, image_id: str, rotation: int) -> dict[str, Any]:
         return self.apply_edit(image_id, {"rotation": rotation})
+
+    # ------------------------------------------------------------------
+    # Region layer: several pieces on one scan
+    #
+    # A record keeps `regions` as the source of truth; the legacy top-level
+    # polygon / quad / paper_rect / fine_angle always mirror region #1 so the
+    # thumbnail, result preview and export paths keep working unchanged.
+
+    def _region_from_polygon(
+        self,
+        polygon: list[list[float]],
+        rec: dict[str, Any],
+        *,
+        label: str = "A",
+        source: str = "auto",
+        region_id: str | None = None,
+    ) -> dict[str, Any]:
+        cleaned = [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in polygon]
+        xs = [p[0] for p in cleaned]
+        ys = [p[1] for p in cleaned]
+        area = 0.0
+        for index, point in enumerate(cleaned):
+            nxt = cleaned[(index + 1) % len(cleaned)]
+            area += point[0] * nxt[1] - nxt[0] * point[1]
+        area = abs(area) / 2.0
+        quad = rec.get("quad") if isinstance(rec.get("quad"), list) else []
+        if len(quad) != 4:
+            quad = detect_quad(cleaned)["quad"]
+        paper_rect = rec.get("paper_rect") if isinstance(rec.get("paper_rect"), list) else []
+        if len(paper_rect) != 4:
+            paper_rect = detect_paper_rect(cleaned)
+        return {
+            "id": region_id or f"r{uuid.uuid4().hex[:10]}",
+            "label": label,
+            "polygon": cleaned,
+            "quad": quad,
+            "quad_near_rect": bool(rec.get("quad_near_rect")),
+            "quad_aspect": rec.get("quad_aspect"),
+            "paper_rect": paper_rect,
+            "skew": round(float(rec.get("fine_angle", 0) or 0), 2),
+            "enabled": True,
+            "rectify": False,
+            "source": source,
+            "area": round(float(area), 1),
+            "bbox": [int(min(xs)), int(min(ys)), int(max(xs) - min(xs)), int(max(ys) - min(ys))],
+        }
+
+    def _relabel_regions(self, rec: dict[str, Any]) -> None:
+        for index, region in enumerate(rec.get("regions") or []):
+            region["label"] = _region_label(index)
+
+    def _sync_primary(self, rec: dict[str, Any]) -> bool:
+        regions = rec.get("regions") or []
+        primary = regions[0] if regions else None
+        changed = False
+        if primary is None:
+            if rec.get("polygon"):
+                rec["polygon"] = []
+                rec["quad"] = []
+                rec["paper_rect"] = []
+                rec["status"] = "pending"
+                changed = True
+            return changed
+        if rec.get("polygon") != primary["polygon"]:
+            rec["polygon"] = primary["polygon"]
+            changed = True
+        if (rec.get("quad") or []) != (primary.get("quad") or []):
+            rec["quad"] = primary.get("quad") or []
+            changed = True
+        if (rec.get("paper_rect") or []) != (primary.get("paper_rect") or []):
+            rec["paper_rect"] = primary.get("paper_rect") or []
+            changed = True
+        skew = round(float(primary.get("skew", 0) or 0), 2)
+        if abs(float(rec.get("fine_angle", 0) or 0) - skew) > 1e-6:
+            rec["fine_angle"] = skew
+            changed = True
+        if rec.get("status") == "pending":
+            rec["status"] = "ready"
+            rec["error"] = None
+            changed = True
+        return changed
+
+    def _normalize_regions(self, rec: dict[str, Any]) -> bool:
+        """Make sure the region list exists and is consistent. Returns changed."""
+        changed = False
+        raw = rec.get("regions")
+        if not isinstance(raw, list):
+            raw = []
+            changed = True
+        regions: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in raw:
+            if not isinstance(item, dict):
+                changed = True
+                continue
+            polygon = item.get("polygon") or []
+            if not isinstance(polygon, list) or len(polygon) < 3:
+                changed = True
+                continue
+            try:
+                cleaned = [[round(float(p[0]), 1), round(float(p[1]), 1)] for p in polygon]
+            except (TypeError, ValueError, IndexError):
+                changed = True
+                continue
+            ident = str(item.get("id") or "")
+            if not ident or ident in seen:
+                ident = f"r{uuid.uuid4().hex[:10]}"
+                changed = True
+            seen.add(ident)
+            quad = item.get("quad") if isinstance(item.get("quad"), list) else []
+            if len(quad) != 4:
+                quad = detect_quad(cleaned)["quad"]
+                changed = True
+            paper_rect = item.get("paper_rect") if isinstance(item.get("paper_rect"), list) else []
+            if len(paper_rect) != 4:
+                paper_rect = detect_paper_rect(cleaned)
+                changed = True
+            region = {
+                "id": ident,
+                "label": str(item.get("label") or ""),
+                "polygon": cleaned,
+                "quad": quad,
+                "quad_near_rect": bool(item.get("quad_near_rect")),
+                "quad_aspect": item.get("quad_aspect"),
+                "paper_rect": paper_rect,
+                "skew": round(float(clamp(item.get("skew", 0) or 0, -45, 45)), 2),
+                "enabled": item.get("enabled") is not False,
+                "rectify": bool(item.get("rectify")),
+                "source": str(item.get("source") or "auto"),
+                "area": float(item.get("area") or 0),
+                "bbox": item.get("bbox") if isinstance(item.get("bbox"), list) else [],
+            }
+            if len(region["bbox"]) != 4:
+                region["bbox"] = region_bbox(cleaned)
+            regions.append(region)
+        if not regions and rec.get("polygon"):
+            regions = [self._region_from_polygon(rec["polygon"], rec, label="A")]
+            changed = True
+        for index, region in enumerate(regions):
+            label = _region_label(index)
+            if region["label"] != label:
+                region["label"] = label
+                changed = True
+        if regions != raw:
+            changed = True
+        rec["regions"] = regions
+        if not isinstance(rec.get("detect_multi"), bool):
+            rec["detect_multi"] = True
+            changed = True
+        if self._sync_primary(rec):
+            changed = True
+        return changed
+
+    def _region_by_id(self, rec: dict[str, Any], region_id: str) -> dict[str, Any]:
+        for region in rec.get("regions") or []:
+            if region.get("id") == region_id:
+                return region
+        raise UserError("找不到这块纸片，可能刚被删除。")
+
+    def _region_index(self, rec: dict[str, Any], region_id: str) -> int:
+        for index, region in enumerate(rec.get("regions") or []):
+            if region.get("id") == region_id:
+                return index
+        raise UserError("找不到这块纸片，可能刚被删除。")
+
+    def _region_at_point(self, rec: dict[str, Any], x: float, y: float) -> dict[str, Any] | None:
+        for region in rec.get("regions") or []:
+            polygon = region.get("polygon") or []
+            if len(polygon) < 3:
+                continue
+            points = np.asarray(polygon, dtype=np.float32).reshape(-1, 1, 2)
+            if cv2.pointPolygonTest(points, (float(x), float(y)), False) >= 0:
+                return region
+        return None
+
+    def _refresh_region_skew(self, rec: dict[str, Any], image, *, first_global: bool = False) -> None:
+        align = normalize_align(rec.get("align_edge"))
+        for index, region in enumerate(rec.get("regions") or []):
+            if index == 0 and first_global:
+                try:
+                    angle = float(estimate_skew(image, region["polygon"], align=align)["angle"])
+                except Exception:  # noqa: BLE001
+                    angle = estimate_region_skew(image, region["polygon"], region.get("bbox"), align)
+            else:
+                angle = estimate_region_skew(image, region["polygon"], region.get("bbox"), align)
+            region["skew"] = round(float(clamp(angle, -45, 45)), 2)
+
+    def _finish_region_edit(self, rec: dict[str, Any]) -> None:
+        self._relabel_regions(rec)
+        self._sync_primary(rec)
+        if rec.get("regions"):
+            rec["status"] = "ready"
+            rec["error"] = None
+        rec["rev"] = int(rec.get("rev", 1)) + 1
+
+    def _refresh_after_regions(self, image_id: str) -> None:
+        snapshot = _deepcopy(self.find(image_id))
+        if self._write_thumb(snapshot):
+            self._cleanup_old_previews(snapshot["id"], int(snapshot["rev"]))
+
+    def _multi_candidate(self, detection: dict[str, Any]) -> bool:
+        main = float(detection.get("area") or 0)
+        if main <= 0:
+            return False
+        for value in detection.get("other_areas") or []:
+            try:
+                if float(value) >= main * 0.12:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    def _build_regions_from_detection(
+        self, image, detection: dict[str, Any], params: dict[str, Any],
+        *, multi: bool, align: str = "all",
+    ) -> list[dict[str, Any]]:
+        regions: list[dict[str, Any]] = []
+        if multi and self._multi_candidate(detection):
+            try:
+                result = detect_regions(image, params, align=align)
+                regions = result["regions"]
+            except UserError:
+                regions = []
+        primary = build_region(image, detection["polygon"], label="A", source="auto", align="all")
+        primary["skew"] = round(float(detection.get("skew_angle") or 0.0), 2)
+        primary["quad"] = detection.get("quad") or primary["quad"]
+        primary["quad_near_rect"] = bool(detection.get("quad_near_rect"))
+        primary["paper_rect"] = detection.get("paper_rect") or primary["paper_rect"]
+        if not regions:
+            return [primary]
+        regions[0] = primary
+        return regions
+
+    def region_record(self, record: dict[str, Any], region: dict[str, Any]) -> dict[str, Any]:
+        """A record view that renders exactly one region."""
+        view = _deepcopy(record)
+        view["polygon"] = region.get("polygon") or []
+        view["quad"] = region.get("quad") or []
+        view["paper_rect"] = region.get("paper_rect") or detect_paper_rect(view["polygon"])
+        view["holes"] = []
+        view["fine_angle"] = round(float(region.get("skew", 0) or 0), 2)
+        view["quad_manual"] = False
+        view["detection"] = {"quad_near_rect": bool(region.get("quad_near_rect"))}
+        if len(view.get("regions") or []) > 1:
+            view["strokes"] = []
+        output = normalize_output(view.get("output"))
+        if region.get("rectify"):
+            output["mode"] = "rect"
+            output["rectification"] = "quad"
+        view["output"] = output
+        return view
+
+    def export_records(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Expand records into one export item per enabled region."""
+        items: list[dict[str, Any]] = []
+        for record in records:
+            regions = [region for region in (record.get("regions") or [])
+                       if region.get("enabled") is not False]
+            if not regions:
+                continue
+            stem = str(record.get("name") or record.get("id") or "image")
+            base = stem
+            head, dot, tail = stem.rpartition(".")
+            if dot and 1 <= len(tail) <= 5 and tail.isalnum():
+                base = head
+            multi = len(regions) > 1
+            for region in regions:
+                view = self.region_record(record, region)
+                if multi:
+                    view["name"] = f"{base}-{region.get('label') or ''}".strip("-")
+                    view["region_label"] = region.get("label")
+                else:
+                    view["region_label"] = region.get("label")
+                items.append(view)
+        return items
+
+    def set_detect_multi(self, image_id: str, value: bool) -> dict[str, Any]:
+        with self._lock:
+            rec = self.find(image_id)
+            rec["detect_multi"] = bool(value)
+            self.save()
+        return self.detail(image_id)
+
+    def regions_detect(self, image_id: str, params: dict[str, Any] | None = None,
+                       multi: bool | None = None) -> dict[str, Any]:
+        with self._lock:
+            rec = self.find(image_id)
+            if multi is not None:
+                rec["detect_multi"] = bool(multi)
+        return self.detect(image_id, params, clear_manual=False)
+
+    def regions_add(self, image_id: str, x: float, y: float) -> dict[str, Any]:
+        rec = self.find(image_id)
+        image = self.load_source(rec)
+        align = normalize_align(rec.get("align_edge"))
+        polygons = segments_at_point(image, rec.get("params") or {}, float(x), float(y), align=align)
+        if not polygons:
+            raise UserError("这个位置没有识别到纸片。可以换一处点击，或用手动画框。")
+        created: list[dict[str, Any]] = []
+        with self._lock:
+            rec = self.find(image_id)
+            target = self._region_at_point(rec, float(x), float(y))
+            regions = rec.get("regions") or []
+            if target is not None:
+                target_index = self._region_index(rec, target["id"])
+                clicked = build_region(
+                    image, polygons[0], label=target["label"], source="split", align=align,
+                    region_id=target["id"],
+                )
+                clicked["enabled"] = True
+                clicked["rectify"] = bool(target.get("rectify"))
+                regions[target_index] = clicked
+                created.append(clicked)
+                if len(polygons) > 1:
+                    rest = build_region(image, polygons[1], source="split", align=align)
+                    rest["enabled"] = bool(target.get("enabled", True))
+                    regions.append(rest)
+                    created.append(rest)
+            else:
+                for polygon in polygons:
+                    region = build_region(image, polygon, source="point", align=align)
+                    regions.append(region)
+                    created.append(region)
+            rec["regions"] = regions
+            rec["manual"] = True
+            self._finish_region_edit(rec)
+            self.save()
+        self._refresh_after_regions(image_id)
+        detail = self.detail(image_id)
+        detail["created_regions"] = [region["id"] for region in created]
+        return detail
+
+    def regions_merge(self, image_id: str, region_ids: list[str]) -> dict[str, Any]:
+        ids: list[str] = []
+        for value in region_ids or []:
+            ident = str(value)
+            if ident and ident not in ids:
+                ids.append(ident)
+        if len(ids) < 2:
+            raise UserError("请选择至少两块纸片再合并。")
+        rec = self.find(image_id)
+        image = self.load_source(rec)
+        with self._lock:
+            rec = self.find(image_id)
+            regions = rec.get("regions") or []
+            targets = [self._region_by_id(rec, ident) for ident in ids]
+            polygon = merge_polygons(
+                [region["polygon"] for region in targets], rec["width"], rec["height"],
+            )
+            if not polygon:
+                raise UserError(
+                    "这两块纸片没有连在一起，合并会把中间的背景也带进来。"
+                    "请分别导出，或先在「顶点」模式把两块连成一片。"
+                )
+            keep = targets[0]
+            keep_index = self._region_index(rec, keep["id"])
+            merged = build_region(
+                image, polygon, label=keep["label"], source="merge", align=normalize_align(rec.get("align_edge")),
+                region_id=keep["id"],
+            )
+            merged["enabled"] = any(region.get("enabled", True) for region in targets)
+            merged["rectify"] = any(bool(region.get("rectify")) for region in targets)
+            rec["regions"][keep_index] = merged
+            drop = {region["id"] for region in targets[1:]}
+            rec["regions"] = [region for region in rec["regions"] if region["id"] not in drop]
+            rec["manual"] = True
+            self._finish_region_edit(rec)
+            self.save()
+        self._refresh_after_regions(image_id)
+        return self.detail(image_id)
+
+    def regions_update(self, image_id: str, region_id: str,
+                       patch: dict[str, Any]) -> dict[str, Any]:
+        rec = self.find(image_id)
+        image = self.load_source(rec)
+        with self._lock:
+            rec = self.find(image_id)
+            region = self._region_by_id(rec, region_id)
+            if "enabled" in patch:
+                region["enabled"] = bool(patch.get("enabled"))
+            if "rectify" in patch:
+                region["rectify"] = bool(patch.get("rectify"))
+            if "polygon" in patch:
+                polygon = self._validate_polygon(patch.get("polygon"), rec["width"], rec["height"])
+                rebuilt = build_region(
+                    image, polygon, label=region["label"], source="manual",
+                    align=normalize_align(rec.get("align_edge")), region_id=region["id"],
+                )
+                rebuilt["enabled"] = region.get("enabled", True)
+                rebuilt["rectify"] = bool(region.get("rectify"))
+                rec["regions"][self._region_index(rec, region_id)] = rebuilt
+            rec["manual"] = True
+            self._finish_region_edit(rec)
+            self.save()
+        self._refresh_after_regions(image_id)
+        return self.detail(image_id)
+
+    def regions_delete(self, image_id: str, region_id: str) -> dict[str, Any]:
+        with self._lock:
+            rec = self.find(image_id)
+            regions = rec.get("regions") or []
+            if len(regions) <= 1:
+                raise UserError("至少要保留一块纸片；整张都不要请删除这张图片。")
+            index = self._region_index(rec, region_id)
+            regions.pop(index)
+            rec["regions"] = regions
+            rec["manual"] = True
+            self._finish_region_edit(rec)
+            self.save()
+        self._refresh_after_regions(image_id)
+        return self.detail(image_id)
+
+    def regions_manual(self, image_id: str, polygon: list[list[float]]) -> dict[str, Any]:
+        rec = self.find(image_id)
+        image = self.load_source(rec)
+        validated = self._validate_polygon(polygon, rec["width"], rec["height"])
+        if len(validated) < 3:
+            raise UserError("手动画框至少需要 3 个点。")
+        with self._lock:
+            rec = self.find(image_id)
+            region = build_region(
+                image, validated, source="manual", align=normalize_align(rec.get("align_edge")),
+            )
+            rec.setdefault("regions", []).append(region)
+            rec["manual"] = True
+            self._finish_region_edit(rec)
+            self.save()
+        self._refresh_after_regions(image_id)
+        detail = self.detail(image_id)
+        detail["created_regions"] = [region["id"]]
+        return detail
 
     # ------------------------------------------------------------------
     # Deletion / maintenance

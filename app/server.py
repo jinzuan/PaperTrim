@@ -174,6 +174,41 @@ def create_app(store: Store | ProjectManager, jobs: JobManager, token: str | Non
         body = await _body(request)
         return _json(store.apply_edit(image_id, body))
 
+    async def api_regions(request: Request) -> Response:
+        image_id = request.path_params["image_id"]
+        body = await _body(request)
+        action = str(body.get("action") or "")
+
+        def run() -> dict[str, Any]:
+            if action == "add":
+                try:
+                    x = float(body.get("x"))
+                    y = float(body.get("y"))
+                except (TypeError, ValueError):
+                    raise UserError("点击位置无效。")
+                return store.regions_add(image_id, x, y)
+            if action == "merge":
+                raw_ids = body.get("ids") if isinstance(body.get("ids"), list) else []
+                return store.regions_merge(image_id, [str(item) for item in raw_ids])
+            if action == "update":
+                region_id = str(body.get("id") or "")
+                patch = body.get("patch") if isinstance(body.get("patch"), dict) else {}
+                return store.regions_update(image_id, region_id, patch)
+            if action == "delete":
+                return store.regions_delete(image_id, str(body.get("id") or ""))
+            if action == "manual":
+                polygon = body.get("polygon") if isinstance(body.get("polygon"), list) else []
+                return store.regions_manual(image_id, polygon)
+            if action == "detect":
+                params = body.get("params") if isinstance(body.get("params"), dict) else None
+                multi = body.get("multi")
+                return store.regions_detect(
+                    image_id, params, None if multi is None else _parse_bool(multi, True),
+                )
+            raise UserError("未知的区域操作。")
+
+        return _json(await run_in_threadpool(run))
+
     async def api_image_delete(request: Request) -> Response:
         image_id = request.path_params["image_id"]
         store.remove(image_id)
@@ -206,10 +241,20 @@ def create_app(store: Store | ProjectManager, jobs: JobManager, token: str | Non
         image_id = request.path_params["image_id"]
         body = await _body(request)
         output = body.get("output") if isinstance(body.get("output"), dict) else {}
+        region_id = str(body.get("region_id") or "")
         rec = _deepcopy(store.find(image_id))
         if rec.get("status") != "ready" or not rec.get("polygon"):
             raise UserError("这张图片还没有完成识别。")
         rec["output"] = normalize_output(output, rec.get("output") or {})
+        if region_id:
+            region = next(
+                (item for item in (rec.get("regions") or []) if item.get("id") == region_id),
+                None,
+            )
+            if region is None:
+                raise UserError("找不到这块纸片。")
+            rec = store.region_record(rec, region)
+            rec["output"] = normalize_output(output, rec.get("output") or {})
         source = store.load_source(rec)
         try:
             max_side = int(body.get("max_side") or 1100)
@@ -490,6 +535,9 @@ def create_app(store: Store | ProjectManager, jobs: JobManager, token: str | Non
         records = [rec for rec in records if rec.get("status") == "ready" and rec.get("polygon")]
         if not records:
             raise UserError("没有可导出的图片，请先完成识别。")
+        records = store.export_records(records)
+        if not records:
+            raise UserError("这些图片的纸片都被弃选了，没有内容可导出。")
 
         def worker(handle):
             return run_export(store, records, kind, options, handle.progress)
@@ -595,6 +643,7 @@ def create_app(store: Store | ProjectManager, jobs: JobManager, token: str | Non
         Route("/api/images/{image_id}/recompute", api_recompute, methods=["POST"]),
         Route("/api/images/{image_id}/deskew", api_deskew, methods=["POST"]),
         Route("/api/images/{image_id}/align", api_align, methods=["POST"]),
+        Route("/api/images/{image_id}/regions", api_regions, methods=["POST"]),
         Route("/api/images/{image_id}/render-preview", api_render_preview, methods=["POST"]),
         Route("/media/source/{image_id}.jpg", media_source),
         Route("/media/thumb/{image_id}/{rev}.png", media_thumb),

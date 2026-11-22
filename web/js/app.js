@@ -115,6 +115,14 @@ class App {
       badgeBits.push(`<span class="badge warn" title="${esc(title)}">${icon("warning")}需检查</span>`);
     }
     if (record.manual) badgeBits.push(`<span class="badge manual">手动</span>`);
+    const regionCount = Number(record.region_count) || 0;
+    const enabledRegions = Number(record.enabled_regions) || 0;
+    if (regionCount > 1) {
+      const hidden = regionCount - enabledRegions;
+      badgeBits.push(
+        `<span class="badge regions" title="这张图识别到 ${regionCount} 块纸片${hidden ? `，其中 ${hidden} 块已弃选` : ""}">片 ${enabledRegions}/${regionCount}</span>`,
+      );
+    }
     if (record.output?.mode === "rect") badgeBits.push(`<span class="badge rot">完整矩形</span>`);
     if (record.rotation) badgeBits.push(`<span class="badge rot">${record.rotation}°</span>`);
     const thumb = ready && record.thumb_url ? record.thumb_url : record.source_url;
@@ -130,6 +138,9 @@ class App {
       record.status === "pending" ? "原图" : "",
       skew,
       record.manual ? "手动轮廓" : "",
+      (Number(record.region_count) || 0) > 1
+        ? `${Number(record.enabled_regions) || 0} 块纸片`
+        : "",
     ].filter(Boolean).join(" · ");
     const warnTitle = warnings.map((item) => item.message).join("；");
     const confidence = record.confidence != null ? `可信度 ${Math.round(record.confidence * 100)}%` : "";

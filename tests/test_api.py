@@ -150,6 +150,26 @@ class ApiTests(unittest.TestCase):
                     self.assertEqual(overlay.status_code, 200, overlay.text)
                     self.assertGreater(len(overlay.content), 1000)
 
+                    detail = (await client.get(
+                        f"/api/images/{image_id}", headers={"X-PaperTrim-Token": token}
+                    )).json()
+                    self.assertTrue(detail["regions"])
+                    region_id = detail["regions"][0]["id"]
+                    marked = await client.post(
+                        f"/api/images/{image_id}/regions",
+                        headers={"X-PaperTrim-Token": token},
+                        json={"action": "update", "id": region_id, "patch": {"rectify": True}},
+                    )
+                    self.assertEqual(marked.status_code, 200, marked.text)
+                    self.assertEqual(marked.json()["rectify_regions"], 1)
+                    region_preview = await client.post(
+                        f"/api/images/{image_id}/render-preview",
+                        headers={"X-PaperTrim-Token": token},
+                        json={"output": {"mode": "cutout"}, "region_id": region_id},
+                    )
+                    self.assertEqual(region_preview.status_code, 200, region_preview.text)
+                    self.assertGreater(len(region_preview.content), 500)
+
                     saved = await client.post(
                         "/api/project/save",
                         headers={"X-PaperTrim-Token": token},

@@ -66,10 +66,13 @@ export const api = {
   alignEdge: (id, align) => request(`/api/images/${encodeURIComponent(id)}/align`, {
     method: "POST", body: { align },
   }),
-  renderPreview: (id, output, maxSide = 1100, overlay = false) => requestBlob(
+  renderPreview: (id, output, maxSide = 1100, overlay = false, regionId = "") => requestBlob(
     `/api/images/${encodeURIComponent(id)}/render-preview`,
-    { method: "POST", body: { output, max_side: maxSide, overlay } },
+    { method: "POST", body: { output, max_side: maxSide, overlay, region_id: regionId } },
   ),
+  regions: (id, payload) => request(`/api/images/${encodeURIComponent(id)}/regions`, {
+    method: "POST", body: payload,
+  }),
   batch: (ids, action, value = 0, params = null, extra = {}) =>
     request("/api/batch", { method: "POST", body: { ids, action, value, params, ...extra } }),
   saveOutputDefaults: (output) =>

@@ -39,6 +39,12 @@ export class Editor {
     this.drag = null;
     this.brushStroke = null;
     this.pointer = null;
+    this.regions = [];
+    this.regionDrag = null;
+    this.outline = [];
+    this.regionBusy = false;
+    this.resultLayout = [];
+    this.regionPalette = ["#e05a3d", "#3d8fe0", "#2fa36b", "#a35ae0", "#e0a53d", "#3dbfc8", "#d1557f"];
     this.saving = false;
     this.pendingSave = false;
     this.dirty = false;
@@ -117,6 +123,10 @@ export class Editor {
       curveEnabled: $("#curveEnabled"),
       curveAmount: $("#curveAmount"),
       curveAmountLabel: $("#curveAmountLabel"),
+      regionList: $("#regionList"),
+      regionAuto: $("#regionAuto"),
+      regionRedetect: $("#regionRedetect"),
+      regionOutline: $("#regionOutline"),
     };
   }
 
@@ -155,6 +165,11 @@ export class Editor {
       if (this.mode !== "pan") this.draw();
     });
     e.canvas.addEventListener("contextmenu", (event) => this.onContextMenu(event));
+    e.canvas.addEventListener("dblclick", (event) => {
+      if (this.mode !== "outline") return;
+      event.preventDefault();
+      if (this.outline.length >= 3) this.commitOutline();
+    });
     e.canvas.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
 
     e.brushSize.addEventListener("input", () => {
@@ -229,6 +244,10 @@ export class Editor {
       this.draw();
     });
     e.curveAmount.addEventListener("change", () => this._saveCurveSoon());
+    e.regionRedetect.addEventListener("click", () => this.redetectRegions());
+    e.regionOutline.addEventListener("click", () => this.setMode("outline"));
+    e.regionAuto.addEventListener("change", () => this.toggleRegionAuto());
+    e.regionList.addEventListener("click", (event) => this._onRegionListClick(event));
     $$(".edge-quick button").forEach((button) => {
       button.addEventListener("click", () => {
         const value = Number(button.dataset.edge) || 0;
@@ -305,6 +324,8 @@ export class Editor {
     this.app.updateBodyLock();
     this._syncControls();
     this._syncOutputUi();
+    this.regions = clone(detail.regions || []);
+    this._syncRegionPanel();
     this._renderWarnings();
     this._updatePreview();
     this.els.previewEmpty.textContent = "尚无预览";
@@ -378,11 +399,13 @@ export class Editor {
   }
 
   setMode(mode) {
-    if (!["vertex", "quad", "add", "erase", "pan"].includes(mode)) return;
+    if (!["vertex", "quad", "add", "erase", "pan", "region", "outline"].includes(mode)) return;
     if (this.resultMode) this.setView("source");
     this.mode = mode;
     this.selected = -1;
     this.selectedCorner = -1;
+    this.regionDrag = null;
+    if (mode !== "outline") this.outline = [];
     if (mode === "quad" && this.quad.length !== 4) {
       this.quad = clone(this.detail?.detection?.quad || []);
     }
@@ -393,6 +416,8 @@ export class Editor {
       add: "按住左键涂抹，把漏掉的纸边补回来",
       erase: "按住左键涂抹，擦掉多余的背景",
       pan: "拖动画面平移；滚轮缩放",
+      region: "纸片模式：单击纸片/背景 = 重新识别该处；右键 = 弃选/恢复；拖动一块到相邻的另一块 = 合并",
+      outline: "手绘模式：依次点击外轮廓，双击或回车闭合；Esc 取消",
     };
     this.els.hint.textContent = hints[mode] || "";
     this.els.brush.hidden = !["add", "erase"].includes(mode);
@@ -400,6 +425,8 @@ export class Editor {
     canvas.classList.toggle("mode-pan", mode === "pan");
     canvas.classList.toggle("mode-add", mode === "add");
     canvas.classList.toggle("mode-erase", mode === "erase");
+    canvas.classList.toggle("mode-region", mode === "region");
+    canvas.classList.toggle("mode-outline", mode === "outline");
     this.draw();
   }
 
@@ -407,6 +434,210 @@ export class Editor {
     $$(".modes button").forEach((button) => {
       button.classList.toggle("active", button.dataset.mode === this.mode);
     });
+  }
+
+  // ------------------------------------------------------------------
+  // Region layer: several pieces on one scan
+
+  _regionColor(index) {
+    return this.regionPalette[index % this.regionPalette.length];
+  }
+
+  _regionSize(region) {
+    const box = region.bbox || [];
+    if (box.length === 4) {
+      return `${Math.round(Number(box[2]) || 0)}×${Math.round(Number(box[3]) || 0)}`;
+    }
+    return "";
+  }
+
+  _syncRegionPanel() {
+    const list = this.els.regionList;
+    if (!list) return;
+    const regions = this.regions || [];
+    this.els.regionAuto.checked = this.detail?.detect_multi !== false;
+    list.innerHTML = "";
+    if (!regions.length) {
+      const empty = document.createElement("div");
+      empty.className = "region-empty";
+      empty.textContent = "还没有纸片，点「重新判断」或用手绘画框。";
+      list.appendChild(empty);
+      return;
+    }
+    regions.forEach((region, index) => {
+      const row = document.createElement("div");
+      row.className = "region-row";
+      row.dataset.region = region.id;
+      if (region.enabled === false) row.classList.add("muted");
+      row.title = region.enabled === false ? "已弃选，导出时跳过" : "已选中，导出时包含";
+      const dot = document.createElement("span");
+      dot.className = "region-dot";
+      dot.style.background = this._regionColor(index);
+      const name = document.createElement("span");
+      name.className = "region-name";
+      name.textContent = region.label || String(index + 1);
+      const size = document.createElement("span");
+      size.className = "region-size";
+      size.textContent = this._regionSize(region);
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "region-btn";
+      toggle.dataset.regionAction = "toggle";
+      toggle.title = region.enabled === false ? "恢复导出" : "弃选（不导出这块）";
+      toggle.innerHTML = icon("eye");
+      const rectify = document.createElement("button");
+      rectify.type = "button";
+      rectify.className = `region-btn${region.rectify ? " on" : ""}`;
+      rectify.dataset.regionAction = "rectify";
+      rectify.title = "四角拉正：拉伸四边顶点，输出长方形";
+      rectify.textContent = "▭";
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "region-btn";
+      del.dataset.regionAction = "delete";
+      del.title = "删除这块纸片";
+      del.innerHTML = icon("trash");
+      del.disabled = regions.length <= 1;
+      row.append(dot, name, size, toggle, rectify, del);
+      list.appendChild(row);
+    });
+  }
+
+  _onRegionListClick(event) {
+    const button = event.target.closest("[data-region-action]");
+    if (!button) return;
+    const row = button.closest("[data-region]");
+    if (!row) return;
+    const region = (this.regions || []).find((item) => item.id === row.dataset.region);
+    if (!region) return;
+    const action = button.dataset.regionAction;
+    if (action === "toggle") {
+      this.updateRegion(region.id, { enabled: region.enabled === false });
+    } else if (action === "rectify") {
+      this.updateRegion(region.id, { rectify: !region.rectify });
+    } else if (action === "delete") {
+      this.deleteRegion(region);
+    }
+  }
+
+  _regionAt(point) {
+    const regions = this.regions || [];
+    for (let index = regions.length - 1; index >= 0; index -= 1) {
+      if (this._pointInPolygon(point, regions[index].polygon || [])) return regions[index];
+    }
+    return null;
+  }
+
+  _pointInPolygon([x, y], polygon) {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+      const xi = Number(polygon[i][0]);
+      const yi = Number(polygon[i][1]);
+      const xj = Number(polygon[j][0]);
+      const yj = Number(polygon[j][1]);
+      const crosses = (yi > y) !== (yj > y);
+      if (crosses && x < ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  async _regionCall(payload, message = "正在处理纸片…") {
+    if (!this.detail || this.regionBusy) return null;
+    this.regionBusy = true;
+    this.setBusy(true, message);
+    try {
+      const detail = await api.regions(this.detail.id, payload);
+      this.dirty = false;
+      clearTimeout(this.saveTimer);
+      this._applyDetail(detail, { replaceGeometry: true });
+      this.app.onImageUpdated(detail);
+      this.draw();
+      return detail;
+    } catch (error) {
+      toast(error.message || "纸片操作失败", "error");
+      return null;
+    } finally {
+      this.regionBusy = false;
+      this.setBusy(false);
+    }
+  }
+
+  async updateRegion(regionId, patch) {
+    const detail = await this._regionCall({ action: "update", id: regionId, patch },
+      "正在更新纸片…");
+    if (detail && patch.enabled !== undefined) {
+      toast(patch.enabled ? "已恢复导出这块纸片" : "已弃选这块纸片（不导出）", "success");
+    }
+  }
+
+  async deleteRegion(region) {
+    if ((this.regions || []).length <= 1) {
+      toast("至少要保留一块纸片；整张不要请删除图片。", "info");
+      return;
+    }
+    const proceed = await this.app.confirm({
+      title: `删除纸片 ${region.label || ""}？`,
+      message: "只是从这张图里去掉这一块，原图不会删除。",
+      okLabel: "删除",
+      danger: true,
+    });
+    if (!proceed) return;
+    await this._regionCall({ action: "delete", id: region.id }, "正在删除纸片…");
+  }
+
+  async redetectRegions() {
+    const detail = await this._regionCall({
+      action: "detect",
+      multi: this.els.regionAuto.checked,
+    }, "正在重新判断纸片…");
+    if (detail) {
+      toast(`已重新判断：${(detail.regions || []).length} 块纸片`, "success");
+      this._applyDetail(detail, { replaceGeometry: true });
+      this.draw();
+    }
+  }
+
+  async toggleRegionAuto() {
+    const multi = this.els.regionAuto.checked;
+    const detail = await this._regionCall({ action: "detect", multi }, "正在按新设置重新判断…");
+    if (detail) {
+      toast(multi ? "已开启：自动判断一张图里的多块纸片" : "已关闭：只保留最大的一块纸片", "success");
+    }
+  }
+
+  async addRegionAt(point) {
+    const inside = this._regionAt(point);
+    if (!this.detail) return;
+    const detail = await this._regionCall({
+      action: "add", x: point[0], y: point[1],
+    }, "正在重新识别该处…");
+    if (!detail) return;
+    const created = detail.created_regions || [];
+    if (created.length > 1) toast("这里其实有多块纸片，已拆开", "success");
+    else if (inside) toast(`已重新识别纸片 ${inside.label || ""}`, "success");
+    else toast("已新增一块纸片", "success");
+    this.draw();
+  }
+
+  async mergeRegions(regionIds) {
+    if (regionIds.length < 2) return;
+    const detail = await this._regionCall({ action: "merge", ids: regionIds }, "正在合并纸片…");
+    if (detail) {
+      toast("已合并为一块纸片", "success");
+      this.draw();
+    }
+  }
+
+  async commitOutline() {
+    if (this.outline.length < 3) {
+      toast("手绘纸片至少需要 3 个点。", "info");
+      return;
+    }
+    const polygon = this.outline.map((point) => [Number(point[0]), Number(point[1])]);
+    this.outline = [];
+    const detail = await this._regionCall({ action: "manual", polygon }, "正在加入手绘纸片…");
+    if (detail) toast("已加入手绘纸片", "success");
+    this.draw();
   }
 
   _syncWrapClass() {
@@ -846,6 +1077,8 @@ export class Editor {
     this._renderWarnings();
     this._updatePreview();
     this._syncControls();
+    this.regions = clone(detail.regions || []);
+    this._syncRegionPanel();
   }
 
   markEdited() {
@@ -964,10 +1197,23 @@ export class Editor {
     this.resultPending = true;
     this.setBusy(true, "正在生成结果预览…");
     try {
-      const blob = await api.renderPreview(this.detail.id, this._outputFromControls(), 1800, true);
-      if (token !== this.resultToken || !this.resultMode || !this.openFlag) return;
-      const url = URL.createObjectURL(blob);
-      const image = await loadImage(url);
+      const regions = (this.regions || []).filter((region) => region.enabled !== false);
+      let image;
+      let url;
+      if (regions.length > 1) {
+        const composite = await this._composeRegionResults(regions, token);
+        if (!composite || token !== this.resultToken) return;
+        ({ image, url } = composite);
+      } else {
+        const region = regions[0];
+        const blob = await api.renderPreview(
+          this.detail.id, this._outputFromControls(), 1800, true, region ? region.id : "",
+        );
+        if (token !== this.resultToken || !this.resultMode || !this.openFlag) return;
+        url = URL.createObjectURL(blob);
+        image = await loadImage(url);
+        this.resultLayout = [];
+      }
       if (token !== this.resultToken || !this.resultMode || !this.openFlag) {
         URL.revokeObjectURL(url);
         return;
@@ -985,6 +1231,61 @@ export class Editor {
         this.setBusy(false);
       }
     }
+  }
+
+  async _composeRegionResults(regions, token) {
+    const output = this._outputFromControls();
+    const blobs = await Promise.all(regions.map((region) => api.renderPreview(
+      this.detail.id, output, 900, false, region.id,
+    )));
+    if (token !== this.resultToken || !this.openFlag) return null;
+    const urls = blobs.map((blob) => URL.createObjectURL(blob));
+    const images = await Promise.all(urls.map((url) => loadImage(url)));
+    if (token !== this.resultToken || !this.openFlag) {
+      urls.forEach((item) => URL.revokeObjectURL(item));
+      return null;
+    }
+    const gap = 16;
+    const columns = images.length <= 2 ? images.length : 2;
+    const rows = Math.ceil(images.length / columns);
+    const cellWidth = Math.round(Math.min(900, 2200 / columns));
+    const cellHeights = [];
+    for (let row = 0; row < rows; row += 1) {
+      let tallest = 1;
+      for (let column = 0; column < columns; column += 1) {
+        const item = images[row * columns + column];
+        if (!item) continue;
+        tallest = Math.max(tallest, cellWidth * item.naturalHeight / Math.max(1, item.naturalWidth));
+      }
+      cellHeights.push(Math.round(tallest));
+    }
+    const canvasW = columns * cellWidth + gap * (columns - 1);
+    const canvasH = cellHeights.reduce((sum, value) => sum + value, 0) + gap * (rows - 1);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, canvasW);
+    canvas.height = Math.max(1, canvasH);
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const layout = [];
+    images.forEach((item, index) => {
+      const row = Math.floor(index / columns);
+      const column = index % columns;
+      const scale = cellWidth / Math.max(1, item.naturalWidth);
+      const drawH = Math.round(item.naturalHeight * scale);
+      const x = column * (cellWidth + gap);
+      const y = cellHeights.slice(0, row).reduce((sum, value) => sum + value, 0) + row * gap;
+      ctx.drawImage(item, x, y, cellWidth, drawH);
+      layout.push({
+        label: regions[index].label || String(index + 1),
+        rectify: Boolean(regions[index].rectify),
+        x, y, width: cellWidth, height: drawH,
+      });
+    });
+    urls.forEach((item) => URL.revokeObjectURL(item));
+    const dataUrl = canvas.toDataURL("image/png");
+    const image = await loadImage(dataUrl);
+    this.resultLayout = layout;
+    return { image, url: dataUrl };
   }
 
   fit() {
@@ -1095,7 +1396,15 @@ export class Editor {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(activeImage, 0, 0, cssW, cssH);
-    if (this.resultMode) return;
+    if (this.resultMode) {
+      this._drawResultLabels(ctx);
+      return;
+    }
+
+    if (this.mode === "region") {
+      this._drawRegionOverlay(ctx, true);
+      return;
+    }
 
     const points = this.polygon.map(([x, y]) => [x * this.scale, y * this.scale]);
     const curveAmount = this._curveAmount();
@@ -1213,6 +1522,138 @@ export class Editor {
       ctx.stroke();
       ctx.restore();
     }
+
+    if ((this.regions || []).length > 1) this._drawRegionOverlay(ctx, false);
+    if (this.mode === "outline") this._drawOutlineDraft(ctx);
+  }
+
+  _rgba(hex, alpha) {
+    const value = String(hex || "#ffffff").replace("#", "");
+    const full = value.length === 3
+      ? value.split("").map((char) => char + char).join("")
+      : value;
+    const number = parseInt(full, 16);
+    const r = (number >> 16) & 255;
+    const g = (number >> 8) & 255;
+    const b = number & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  _tracePolygon(ctx, points) {
+    if (!points.length) return;
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+    ctx.closePath();
+  }
+
+  _drawRegionOverlay(ctx, showAll) {
+    const hovered = this.regionDrag && this.regionDrag.moved && this.pointer
+      ? this._regionAt(this.pointer) : null;
+    (this.regions || []).forEach((region, index) => {
+      if (!showAll && index === 0) return;
+      const points = (region.polygon || []).map(([x, y]) => [x * this.scale, y * this.scale]);
+      if (points.length < 3) return;
+      const color = this._regionColor(index);
+      const disabled = region.enabled === false;
+      ctx.save();
+      this._tracePolygon(ctx, points);
+      if (showAll) {
+        ctx.fillStyle = this._rgba(color, disabled ? 0.05 : 0.14);
+        ctx.fill();
+      }
+      ctx.setLineDash(disabled ? [7, 5] : []);
+      ctx.lineWidth = showAll ? 2.6 : 1.9;
+      ctx.strokeStyle = disabled ? "rgba(198, 198, 198, .9)" : color;
+      ctx.stroke();
+      if (hovered && hovered.id === region.id && this.regionDrag.regionId
+          && this.regionDrag.regionId !== region.id) {
+        ctx.setLineDash([]);
+        ctx.lineWidth = 5.5;
+        ctx.strokeStyle = "rgba(255, 240, 200, .95)";
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      if (showAll || (this.regions || []).length > 1) {
+        const xs = points.map((point) => point[0]);
+        const ys = points.map((point) => point[1]);
+        const left = Math.min(...xs) + 8;
+        const top = Math.min(...ys) + 8;
+        const label = `${region.label || index + 1}${region.rectify ? " · 方" : ""}`;
+        ctx.font = "600 13px ui-sans-serif, system-ui, sans-serif";
+        const width = ctx.measureText(label).width + 18;
+        ctx.fillStyle = disabled ? "rgba(96, 96, 96, .86)" : color;
+        const radius = 7;
+        ctx.beginPath();
+        if (typeof ctx.roundRect === "function") ctx.roundRect(left, top, width, 23, radius);
+        else ctx.rect(left, top, width, 23);
+        ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, left + 9, top + 12.5);
+      }
+      ctx.restore();
+    });
+  }
+
+  _drawOutlineDraft(ctx) {
+    const points = (this.outline || []).map(([x, y]) => [x * this.scale, y * this.scale]);
+    if (!points.length) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(points[0][0], points[0][1]);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i][0], points[i][1]);
+    if (this.pointer && this.mode === "outline") {
+      ctx.lineTo(this.pointer[0] * this.scale, this.pointer[1] * this.scale);
+    }
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "#7ad1ff";
+    ctx.stroke();
+    ctx.setLineDash([]);
+    points.forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#7ad1ff";
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(20, 40, 55, .8)";
+      ctx.stroke();
+    });
+    if (this.pointer) {
+      ctx.font = "500 12px ui-sans-serif, system-ui, sans-serif";
+      ctx.fillStyle = "rgba(10, 25, 35, .72)";
+      const hint = points.length >= 3 ? "双击或回车闭合" : "继续点击";
+      ctx.fillRect(this.pointer[0] * this.scale + 12, this.pointer[1] * this.scale + 12,
+        ctx.measureText(hint).width + 14, 20);
+      ctx.fillStyle = "#e6f6ff";
+      ctx.textBaseline = "middle";
+      ctx.fillText(hint, this.pointer[0] * this.scale + 19, this.pointer[1] * this.scale + 22);
+    }
+    ctx.restore();
+  }
+
+  _drawResultLabels(ctx) {
+    const layout = this.resultLayout || [];
+    if (layout.length < 2) return;
+    layout.forEach((cell, index) => {
+      const x = cell.x * this.scale + 8;
+      const y = cell.y * this.scale + 8;
+      const color = this._regionColor(index);
+      const label = `${cell.label || index + 1}${cell.rectify ? " · 方" : ""}`;
+      ctx.save();
+      ctx.font = "600 13px ui-sans-serif, system-ui, sans-serif";
+      const width = ctx.measureText(label).width + 18;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      if (typeof ctx.roundRect === "function") ctx.roundRect(x, y, width, 23, 7);
+      else ctx.rect(x, y, width, 23);
+      ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, x + 9, y + 12.5);
+      ctx.restore();
+    });
   }
 
   _point(event) {
@@ -1297,6 +1738,29 @@ export class Editor {
     const sx = event.clientX - rect.left;
     const sy = event.clientY - rect.top;
     const point = this._clampPoint(this._point(event));
+
+    if (this.mode === "region") {
+      event.preventDefault();
+      const hit = this._regionAt(point);
+      this.regionDrag = {
+        regionId: hit ? hit.id : null,
+        startX: sx,
+        startY: sy,
+        moved: false,
+      };
+      this.pointer = point;
+      this.els.canvas.setPointerCapture(event.pointerId);
+      this.draw();
+      return;
+    }
+
+    if (this.mode === "outline") {
+      event.preventDefault();
+      this.outline.push(point);
+      this.pointer = point;
+      this.draw();
+      return;
+    }
 
     if (this.mode === "quad") {
       const corner = this._findCorner(sx, sy);
@@ -1383,6 +1847,21 @@ export class Editor {
       return;
     }
 
+    if (this.regionDrag) {
+      this.pointer = point;
+      if (Math.hypot(sx - this.regionDrag.startX, sy - this.regionDrag.startY) > 5) {
+        this.regionDrag.moved = true;
+      }
+      this.draw();
+      return;
+    }
+
+    if (this.mode === "outline") {
+      this.pointer = point;
+      this.draw();
+      return;
+    }
+
     if (this.drag && this.drag.kind === "quad") {
       if (!this.drag.moved && Math.hypot(sx - this.drag.startX, sy - this.drag.startY) > 1.5) {
         this.drag.moved = true;
@@ -1437,6 +1916,26 @@ export class Editor {
       this.els.canvas.classList.remove("dragging");
       return;
     }
+    if (this.regionDrag) {
+      const drag = this.regionDrag;
+      this.regionDrag = null;
+      const point = this._clampPoint(this._point(event));
+      try { this.els.canvas.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+      this.draw();
+      if (!drag.moved) {
+        this.addRegionAt(point);
+        return;
+      }
+      const target = this._regionAt(point);
+      if (drag.regionId && target && target.id !== drag.regionId) {
+        this.mergeRegions([drag.regionId, target.id]);
+      }
+      return;
+    }
+    if (this.mode === "outline") {
+      try { this.els.canvas.releasePointerCapture(event.pointerId); } catch { /* noop */ }
+      return;
+    }
     if (this.drag && this.drag.kind === "quad") {
       const wasMoved = this.drag.moved;
       this.drag = null;
@@ -1473,6 +1972,12 @@ export class Editor {
 
   onContextMenu(event) {
     event.preventDefault();
+    if (this.mode === "region") {
+      const point = this._clampPoint(this._point(event));
+      const region = this._regionAt(point);
+      if (region) this.updateRegion(region.id, { enabled: region.enabled === false });
+      return;
+    }
     if (this.mode !== "vertex" || this.busy) return;
     const rect = this.els.canvas.getBoundingClientRect();
     const index = this._findVertex(event.clientX - rect.left, event.clientY - rect.top);
@@ -1502,6 +2007,17 @@ export class Editor {
     const typing = target && (
       target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT"
     );
+    if (event.key === "Enter" && this.mode === "outline" && this.outline.length >= 3) {
+      event.preventDefault();
+      this.commitOutline();
+      return;
+    }
+    if (event.key === "Escape" && this.mode === "outline" && this.outline.length) {
+      event.preventDefault();
+      this.outline = [];
+      this.draw();
+      return;
+    }
     if (event.key === "Escape") {
       if (this.els.modal.hidden) return;
       event.preventDefault();
